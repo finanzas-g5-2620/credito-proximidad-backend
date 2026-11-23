@@ -1,0 +1,55 @@
+# =====================================================================
+# docker-compose.yml - Backend + PostgreSQL
+#
+#   docker compose up --build
+#
+# Levanta la base de datos y el backend; al arrancar la aplicacion,
+# Flyway crea automaticamente las 9 tablas del capitulo 8.
+# =====================================================================
+services:
+
+  postgres:
+    image: postgres:17.6
+    container_name: credito-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: credito_proximidad
+      POSTGRES_USER: credito
+      POSTGRES_PASSWORD: credito
+    ports:
+      - "5432:5432"
+    volumes:
+      - credito_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U credito -d credito_proximidad"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: credito-proximidad-backend:latest
+    container_name: credito-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8081"
+      DB_URL: jdbc:postgresql://postgres:5432/credito_proximidad
+      DB_USER: credito
+      DB_PASSWORD: credito
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/api/v1/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+volumes:
+  credito_pgdata:
