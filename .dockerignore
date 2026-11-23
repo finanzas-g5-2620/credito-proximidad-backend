@@ -1,0 +1,23 @@
+# Artefactos locales de build
+target/
+dist/
+*.jar
+!src/**/*.jar
+
+# Control de versiones y IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+*.iml
+
+# Dependencias de otros proyectos / documentacion no necesaria en la imagen
+docs/
+node_modules/
+*.md
+!README.md
+
+# Entorno
+docker-compose*.yml
+.env
+*.log
