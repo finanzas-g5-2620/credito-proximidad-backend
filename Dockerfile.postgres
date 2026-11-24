@@ -1,0 +1,8 @@
+FROM postgres:18-alpine
+
+# The upstream Alpine entrypoint uses gosu only to drop privileges to postgres.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache su-exec \
+    && grep -q 'exec gosu postgres' /usr/local/bin/docker-entrypoint.sh \
+    && sed -i 's/exec gosu postgres/exec su-exec postgres/' /usr/local/bin/docker-entrypoint.sh \
+    && rm /usr/local/bin/gosu

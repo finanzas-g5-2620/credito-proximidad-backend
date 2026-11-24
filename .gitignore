@@ -34,4 +34,6 @@ Thumbs.db
 
 ### Secrets ###
 .env
+.env.*
+!.env.deploy.example
 src/main/resources/application-local.yml

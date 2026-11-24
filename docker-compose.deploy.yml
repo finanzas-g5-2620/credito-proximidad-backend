@@ -1,0 +1,17 @@
+name: proximity-credit-deploy
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set the database password in the deployment environment}
+  backend:
+    environment:
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set the database password in the deployment environment}
+      JWT_SECRET: ${JWT_SECRET:?Set a unique JWT signing secret}
+      DEMO_DATA_ENABLED: ${DEMO_DATA_ENABLED:-true}
+      DEMO_SCENARIOS_ENABLED: ${DEMO_SCENARIOS_ENABLED:-true}
+      DEMO_ACCOUNT_PASSWORD: ${DEMO_ACCOUNT_PASSWORD:-}
+      DEMO_CLOCK_ENABLED: "false"
+      APP_INITIAL_ADMIN_REQUIRED: "true"
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
