@@ -7,8 +7,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 
 /**
- * Conversion y formato de importes y tasas segun el contrato del frontend:
- * dinero = 2 decimales; tasas = 7 decimales; siempre como string JSON.
+ * Parses and formats the amounts and rates used by the HTTP contract.
+ * Money uses two decimal places. Displayed rates use seven decimal places.
  */
 public final class Amounts {
 
@@ -20,29 +20,29 @@ public final class Amounts {
 
     public static BigDecimal money(String raw) {
         if (raw == null || raw.isBlank()) {
-            throw new BusinessException("INVALID_AMOUNT", "El importe es obligatorio", HttpStatus.BAD_REQUEST);
+            throw new BusinessException("INVALID_AMOUNT", "The amount is required", HttpStatus.BAD_REQUEST);
         }
         try {
             return new BigDecimal(raw.trim()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         } catch (NumberFormatException ex) {
             throw new BusinessException("INVALID_AMOUNT",
-                    "Importe invalido: \"" + raw + "\"", HttpStatus.BAD_REQUEST);
+                    "Invalid amount: \"" + raw + "\"", HttpStatus.BAD_REQUEST);
         }
     }
 
     public static BigDecimal rate(String raw) {
         if (raw == null || raw.isBlank()) {
-            throw new BusinessException("INVALID_RATE", "La tasa es obligatoria", HttpStatus.BAD_REQUEST);
+            throw new BusinessException("INVALID_RATE", "The rate is required", HttpStatus.BAD_REQUEST);
         }
         try {
             BigDecimal value = new BigDecimal(raw.trim());
             if (value.signum() < 0) {
-                throw new BusinessException("INVALID_RATE", "La tasa no puede ser negativa", HttpStatus.BAD_REQUEST);
+                throw new BusinessException("INVALID_RATE", "The rate cannot be negative", HttpStatus.BAD_REQUEST);
             }
             return value.setScale(RATE_SCALE, RoundingMode.HALF_UP);
         } catch (NumberFormatException ex) {
             throw new BusinessException("INVALID_RATE",
-                    "Tasa invalida: \"" + raw + "\"", HttpStatus.BAD_REQUEST);
+                    "Invalid rate: \"" + raw + "\"", HttpStatus.BAD_REQUEST);
         }
     }
 

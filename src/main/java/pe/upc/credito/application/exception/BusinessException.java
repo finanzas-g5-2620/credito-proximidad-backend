@@ -2,10 +2,7 @@ package pe.upc.credito.application.exception;
 
 import org.springframework.http.HttpStatus;
 
-/**
- * Error de negocio con codigo estable para el interceptor del frontend.
- * El cuerpo de respuesta siempre es {code, message, details}.
- */
+/** Business rule failure with a stable machine-readable code. */
 public class BusinessException extends RuntimeException {
 
     private final String code;

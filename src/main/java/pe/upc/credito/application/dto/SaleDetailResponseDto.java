@@ -2,7 +2,7 @@ package pe.upc.credito.application.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-@Schema(name = "SaleDetail", description = "Detalle de mercancia de una venta")
+@Schema(name = "SaleDetail", description = "Persisted sale line item")
 public record SaleDetailResponseDto(
 
         @Schema(example = "1") Integer id,

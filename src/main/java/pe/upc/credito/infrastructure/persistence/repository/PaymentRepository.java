@@ -7,12 +7,15 @@ import pe.upc.credito.infrastructure.persistence.entity.PaymentEntity;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 public interface PaymentRepository extends JpaRepository<PaymentEntity, Integer> {
 
     List<PaymentEntity> findBySettlementIdOrderByPaymentDatetimeAsc(Integer settlementId);
 
     List<PaymentEntity> findBySettlementIdInOrderByPaymentDatetimeAsc(Collection<Integer> settlementIds);
+
+    Optional<PaymentEntity> findBySettlementIdAndIdempotencyKey(Integer settlementId, String idempotencyKey);
 
     @Query("""
             select p from PaymentEntity p

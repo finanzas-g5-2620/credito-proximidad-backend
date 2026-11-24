@@ -1,10 +1,7 @@
 package pe.upc.credito.domain.enums;
 
-/**
- * Tipo de tasa anual. Coincide con el CHECK de la columna
- * customers.compensatory_rate_type / penalty_rate_type (cap. 8.3).
- */
+/** Rate agreement type, independently of its reference period. */
 public enum RateType {
     NOMINAL,
-    EFECTIVA
+    EFFECTIVE
 }

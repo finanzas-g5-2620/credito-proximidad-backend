@@ -9,7 +9,7 @@ import pe.upc.credito.infrastructure.persistence.repository.ProductRepository;
 
 import java.util.List;
 
-/** Caso de uso: catalogo vendible del tenant (GET /catalog/products). */
+/** Projects the authenticated store catalog for checkout. */
 @Service
 public class CatalogService {
 
@@ -28,7 +28,9 @@ public class CatalogService {
                         p.getName(),
                         ApiCodes.sku(p.getProductId()),
                         ApiCodes.category(p.getUnitOfMeasure()),
+                        Amounts.money(p.getCashPrice()),
                         Amounts.money(p.getCreditListPrice()),
+                        Boolean.TRUE.equals(p.getAllowsInstallments()),
                         p.getCurrentStock()))
                 .toList();
     }

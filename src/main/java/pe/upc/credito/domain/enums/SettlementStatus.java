@@ -1,8 +1,8 @@
 package pe.upc.credito.domain.enums;
 
-/** Estados persistidos de una liquidacion mensual (CHECK de monthly_settlements). */
+/** Persisted monthly statement states. */
 public enum SettlementStatus {
-    EMITIDA,
-    PAGADA_TOTAL,
-    EN_MORA
+    PENDING,
+    PAID,
+    OVERDUE
 }

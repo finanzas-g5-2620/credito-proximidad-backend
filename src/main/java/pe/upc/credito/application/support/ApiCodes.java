@@ -1,10 +1,6 @@
 package pe.upc.credito.application.support;
 
-/**
- * Codigos legibles derivados de las llaves primarias. El capitulo 8 no
- * almacena columnas de codigo comercial; se generan de forma determinista
- * para que el frontend muestre comprobantes estables.
- */
+/** Derives stable identifiers and catalog categories from stored records. */
 public final class ApiCodes {
 
     private ApiCodes() {
@@ -26,26 +22,26 @@ public final class ApiCodes {
         return "R-%06d".formatted(id);
     }
 
-    /** DNI de 8 digitos derivado del customer_id (dato de presentacion). */
+    /** Synthetic eight-digit display identifier derived from the customer ID. */
     public static String documentNumber(Integer customerId) {
         return "%08d".formatted(customerId);
     }
 
-    /** SKU derivado del product_id (dato de presentacion). */
+    /** SKU derived from the product ID. */
     public static String sku(Integer productId) {
         return "SKU-%04d".formatted(productId);
     }
 
-    /** Categoria comercial derivada de la unidad de medida del producto. */
+    /** Catalog category derived from the product unit. */
     public static String category(String unitOfMeasure) {
         if (unitOfMeasure == null) {
-            return "General";
+            return "GENERAL";
         }
         return switch (unitOfMeasure.toUpperCase()) {
-            case "SACO", "CAJA", "PAQUETE", "LATA" -> "Abarrotes";
-            case "BOTELLA", "LITRO" -> "Bebidas";
-            case "KG", "KILOGRAMO" -> "Frescos";
-            default -> "General";
+            case "BAG", "PACK" -> "GROCERIES";
+            case "LITER" -> "BEVERAGES";
+            case "KG" -> "FRESH";
+            default -> "GENERAL";
         };
     }
 }

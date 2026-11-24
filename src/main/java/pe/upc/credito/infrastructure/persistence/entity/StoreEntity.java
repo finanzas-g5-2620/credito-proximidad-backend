@@ -34,6 +34,9 @@ public class StoreEntity {
     @Column(name = "address", nullable = false, length = 150)
     private String address;
 
+    @Column(name = "phone_number", length = 20)
+    private String phoneNumber;
+
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private Instant createdAt;
 

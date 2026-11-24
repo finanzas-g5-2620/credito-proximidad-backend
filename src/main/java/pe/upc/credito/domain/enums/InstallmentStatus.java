@@ -1,9 +1,9 @@
 package pe.upc.credito.domain.enums;
 
-/** Estados persistidos de una cuota (CHECK de amortization_schedules). */
+/** Persisted installment states. */
 public enum InstallmentStatus {
-    PENDIENTE,
-    FACTURADA,
-    PAGADA,
-    EN_MORA
+    PENDING,
+    BILLED,
+    OVERDUE,
+    PAID
 }

@@ -15,7 +15,7 @@ import pe.upc.credito.application.service.FinanceService;
 
 @RestController
 @RequestMapping("/finance")
-@Tag(name = "Finanzas", description = "Simulacion del cronograma de amortizacion frances")
+@Tag(name = "Finance", description = "Calculate installment schedules and normalize interest rates")
 public class FinanceController {
 
     private final FinanceService financeService;
@@ -25,13 +25,13 @@ public class FinanceController {
     }
 
     @PostMapping("/simulate")
-    @Operation(summary = "Simular cronograma frances",
-            description = "Calcula la cuota uniforme, la capitalizacion del periodo de gracia "
-                    + "(Art. 1250 C.C.) y el cronograma completo con ajuste de centavo terminal.")
+    @Operation(summary = "Simulate a French amortization schedule",
+            description = "Returns the regular installment, grace interest and the schedule with "
+                    + "a final installment that absorbs any rounding difference.")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Cronograma calculado"),
-            @ApiResponse(responseCode = "400", description = "Datos de entrada invalidos"),
-            @ApiResponse(responseCode = "422", description = "Regla financiera incumplida")
+            @ApiResponse(responseCode = "200", description = "Schedule calculated"),
+            @ApiResponse(responseCode = "400", description = "Invalid request"),
+            @ApiResponse(responseCode = "422", description = "The requested terms violate a financial rule")
     })
     public SimulateScheduleResponseDto simulate(@Valid @RequestBody SimulateScheduleRequestDto request) {
         return financeService.simulate(request);

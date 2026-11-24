@@ -36,6 +36,9 @@ public class AmortizationScheduleEntity {
     @Column(name = "installment_number", nullable = false)
     private Integer installmentNumber;
 
+    @Column(name = "billing_cutoff_date")
+    private LocalDate billingCutoffDate;
+
     @Column(name = "due_date", nullable = false)
     private LocalDate dueDate;
 

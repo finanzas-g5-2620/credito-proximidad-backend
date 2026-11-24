@@ -1,43 +1,33 @@
 spring:
+  autoconfigure:
+    exclude: org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
   application:
-    name: backend-api
-
-  # --- PostgreSQL (cap. 9.4: motor transaccional, READ COMMITTED, pool 10-50) ---
-  # En Docker se sobrescriben con DB_URL / DB_USER / DB_PASSWORD (ver docker-compose.yml)
+    name: proximity-credit
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/credito_proximidad}
-    username: ${DB_USER:credito}
-    password: ${DB_PASSWORD:credito}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/proximity_credit}
+    username: ${DB_USER:proximity_credit}
+    password: ${DB_PASSWORD:proximity-credit-local}
     hikari:
       maximum-pool-size: 25
-      minimum-idle: 10
-      pool-name: credito-hikari
-
+      minimum-idle: 2
+      pool-name: proximity-credit
   jpa:
     hibernate:
-      ddl-auto: validate      # el esquema lo define Flyway, jamas Hibernate
-    open-in-view: false       # transaccion corta por caso de uso (cap. 9.4.2)
+      ddl-auto: validate
+    open-in-view: false
     properties:
       hibernate.jdbc.time_zone: UTC
-
   flyway:
     enabled: true
     locations: classpath:db/migration
-    baseline-on-migrate: false
-
-  # Moneda y tasas viajan como string con decimales fijos (contrato de API del frontend)
   jackson:
     time-zone: UTC
-    serialization:
-      write-dates-as-timestamps: false
-    # Los campos opcionales se omiten (no se envian como null): los schemas
-    # zod del frontend usan .optional(), que no acepta null.
     default-property-inclusion: non_null
 
 server:
-  port: ${SERVER_PORT:8081}               # el frontend apunta a http://localhost:8081/api/v1
+  port: ${SERVER_PORT:8081}
   servlet:
-    context-path: /api/v1             # coincide con la Base URL de docs/api-contract.md
+    context-path: /api/v1
 
 management:
   endpoints:
@@ -45,9 +35,6 @@ management:
       exposure:
         include: health,info
 
-# --- Documentacion interactiva (Swagger UI) ---
-#   UI:   http://localhost:8081/api/v1/swagger-ui.html
-#   JSON: http://localhost:8081/api/v1/v3/api-docs
 springdoc:
   api-docs:
     path: /v3/api-docs
@@ -57,7 +44,13 @@ springdoc:
     tags-sorter: alpha
   show-actuator: false
 
-# --- Datos de demostracion (se insertan solo si la BD esta vacia) ---
 app:
   demo-data:
-    enabled: ${DEMO_DATA_ENABLED:true}
+    enabled: ${DEMO_DATA_ENABLED:false}
+    scenarios: ${DEMO_SCENARIOS_ENABLED:false}
+    password: ${DEMO_ACCOUNT_PASSWORD:password}
+  demo-clock:
+    enabled: ${DEMO_CLOCK_ENABLED:false}
+    date: ${DEMO_CLOCK_DATE:2026-11-26}
+  auth:
+    jwt-secret: ${JWT_SECRET:}

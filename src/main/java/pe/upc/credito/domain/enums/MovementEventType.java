@@ -1,6 +1,6 @@
 package pe.upc.credito.domain.enums;
 
-/** Tipos de evento de la bitacora de auditoria del dashboard. */
+/** Event types displayed by the store activity view. */
 public enum MovementEventType {
     SALE_CREATED,
     SETTLEMENT_CUTOFF,

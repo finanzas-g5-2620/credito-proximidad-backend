@@ -1,86 +1,76 @@
 package pe.upc.credito.infrastructure.web;
 
 import io.swagger.v3.oas.models.OpenAPI;
-import io.swagger.v3.oas.models.info.Contact;
+import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.info.Info;
-import io.swagger.v3.oas.models.media.IntegerSchema;
-import io.swagger.v3.oas.models.parameters.HeaderParameter;
+import io.swagger.v3.oas.models.responses.ApiResponse;
+import io.swagger.v3.oas.models.security.SecurityRequirement;
+import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.servers.Server;
 import io.swagger.v3.oas.models.tags.Tag;
-import org.springdoc.core.customizers.OperationCustomizer;
+import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Documentacion OpenAPI 3 expuesta por springdoc.
- *
- * <p>UI: {@code http://localhost:8081/api/v1/swagger-ui.html}<br>
- * JSON: {@code http://localhost:8081/api/v1/v3/api-docs}</p>
- */
 @Configuration
 public class OpenApiConfig {
 
+    private static final String BEARER = "bearerAuth";
+
     @Bean
-    public OpenAPI creditoOpenApi() {
+    public OpenAPI proximityCreditOpenApi() {
         return new OpenAPI()
                 .info(new Info()
-                        .title("Credito de Proximidad API")
+                        .title("Proximity Credit API")
                         .version("1.0.0")
                         .description("""
-                                Backend del sistema de credito de proximidad (UPC 1ASI0642 - Grupo 5).
-
-                                Implementa el modelo relacional del capitulo 8 sobre PostgreSQL, el motor
-                                de amortizacion frances con base comercial 360/30 y las reglas de cobranza
-                                del Codigo Civil (Arts. 1250 y 1257).
-
-                                **Multi-tenant:** todas las consultas se filtran por tienda. El header
-                                `X-Store-Id` es opcional; si no se envia se usa la tienda 1.
-                                """)
-                        .contact(new Contact()
-                                .name("Grupo 5 - 1ASI0642")
-                                .email("grupo5@upc.edu.pe")))
-                .servers(List.of(
-                        new Server().url("http://localhost:8081/api/v1").description("Entorno local"),
-                        new Server().url("http://credito-backend:8081/api/v1").description("Red Docker")))
+                                Manage stores, catalogs and customer credit accounts. Register sales,
+                                calculate French amortization schedules, close billing cycles and record payments.
+                                Store data is scoped to the caller's authenticated identity. Monetary amounts
+                                are in PEN. Financial dates use the America/Lima business calendar.
+                                """))
+                .servers(List.of(new Server().url("/api/v1").description("Current host")))
+                .components(new Components().addSecuritySchemes(BEARER,
+                        new SecurityScheme().type(SecurityScheme.Type.HTTP)
+                                .scheme("bearer").bearerFormat("JWT")
+                                .description("Access token obtained from the login endpoint.")))
                 .tags(List.of(
-                        new Tag().name("Finanzas").description("Simulacion del cronograma frances"),
-                        new Tag().name("Clientes").description("Cuentas corrientes y linea de credito"),
-                        new Tag().name("Catalogo").description("Productos vendibles"),
-                        new Tag().name("Ventas").description("Registro y consulta de ventas"),
-                        new Tag().name("Liquidaciones").description("Cobranza y estados de cuenta"),
-                        new Tag().name("Analitica").description("KPIs y auditoria"),
-                        new Tag().name("Simulacion").description("Reloj y corte para la demo")));
+                        tag("Authentication", "Sign in and inspect the authenticated session."),
+                        tag("Stores", "Register, update and suspend stores and their administrator accounts."),
+                        tag("Customers", "Manage customer accounts and the original agreed credit terms."),
+                        tag("Catalog", "Manage the store catalog, prices and inventory."),
+                        tag("Finance", "Calculate installments and equivalent interest rates."),
+                        tag("Sales", "Confirm sales and read sales history."),
+                        tag("Settlements", "Close billing cycles, quote balances and receive payment."),
+                        tag("Analytics", "Read key indicators, monthly flows and movements."),
+                        tag("Demo Clock", "Control the clock in a dedicated academic test stack.")));
     }
 
-    /**
-     * Agrega el header {@code X-Store-Id} a todas las operaciones para que se
-     * pueda probar el aislamiento multi-tenant desde Swagger UI.
-     */
     @Bean
-    public OperationCustomizer storeHeaderCustomizer() {
-        return (operation, handlerMethod) -> {
-            if (operation.getParameters() == null) {
-                operation.setParameters(new ArrayList<>());
+    public OpenApiCustomizer describeAuthenticationResponses() {
+        return api -> {
+            if (api.getPaths() == null) {
+                return;
             }
-            boolean alreadyPresent = operation.getParameters().stream()
-                    .anyMatch(parameter -> "X-Store-Id".equals(parameter.getName()));
-            if (!alreadyPresent) {
-                IntegerSchema schema = new IntegerSchema();
-                schema.setDefault(1);
-
-                HeaderParameter header = new HeaderParameter();
-                header.setName("X-Store-Id");
-                header.setIn("header");
-                header.setRequired(false);
-                header.setDescription("Identificador de la tienda (tenant). Por defecto 1.");
-                header.setSchema(schema);
-
-                operation.addParametersItem(header);
-            }
-            return operation;
+            api.getPaths().forEach((path, pathItem) -> pathItem.readOperations().forEach(operation -> {
+                if ("/auth/login".equals(path)) {
+                    operation.setSecurity(List.of());
+                    operation.getResponses().addApiResponse("401",
+                            new ApiResponse().description("Invalid credentials or inactive account."));
+                    return;
+                }
+                operation.setSecurity(List.of(new SecurityRequirement().addList(BEARER)));
+                operation.getResponses().putIfAbsent("401",
+                        new ApiResponse().description("Authentication is required or the token has expired."));
+                operation.getResponses().putIfAbsent("403",
+                        new ApiResponse().description("The authenticated account lacks permission."));
+            }));
         };
+    }
+
+    private static Tag tag(String name, String description) {
+        return new Tag().name(name).description(description);
     }
 }

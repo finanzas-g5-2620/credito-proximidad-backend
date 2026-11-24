@@ -2,7 +2,7 @@ package pe.upc.credito.application.exception;
 
 import org.springframework.http.HttpStatus;
 
-/** Recurso inexistente dentro del tenant autenticado. */
+/** Indicates a missing resource within the authenticated scope. */
 public class ResourceNotFoundException extends BusinessException {
 
     public ResourceNotFoundException(String message) {

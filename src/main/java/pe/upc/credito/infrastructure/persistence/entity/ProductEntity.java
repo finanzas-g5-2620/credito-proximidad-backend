@@ -12,7 +12,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 
-/** Tabla 4 - products (inventario del comercio). */
+/** Persisted catalog and inventory record for a store. */
 @Entity
 @Table(name = "products")
 @Getter
@@ -52,8 +52,8 @@ public class ProductEntity {
     @Column(name = "credit_list_price", nullable = false, precision = 12, scale = 2)
     private BigDecimal creditListPrice;
 
-    @Column(name = "allows_monthly_payments", nullable = false)
-    private Boolean allowsMonthlyPayments;
+    @Column(name = "allows_installments", nullable = false)
+    private Boolean allowsInstallments;
 
     @Column(name = "current_stock", nullable = false)
     private Integer currentStock;

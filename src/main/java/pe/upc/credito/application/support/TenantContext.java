@@ -1,39 +1,67 @@
 package pe.upc.credito.application.support;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 import pe.upc.credito.application.exception.BusinessException;
 
-/**
- * Resolucion del tenant (Ley N. 29733: aislamiento logico por store_id).
- *
- * <p>Mientras la autenticacion JWT no este implementada, el tenant se toma
- * del header {@code X-Store-Id}; si no viene, se usa la tienda 1 (la misma
- * que el frontend fija en {@code cart.store.ts}). Cuando exista sesion, este
- * componente se reemplazara por el store_id del token.</p>
- */
+/** Provides trusted identity and tenant scope from the verified bearer token. */
 @Component
 public class TenantContext {
 
-    public static final String STORE_HEADER = "X-Store-Id";
-    public static final int DEFAULT_STORE_ID = 1;
-
     public Integer currentStoreId() {
-        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
-        if (attributes instanceof ServletRequestAttributes servlet) {
-            String raw = servlet.getRequest().getHeader(STORE_HEADER);
-            if (raw != null && !raw.isBlank()) {
-                try {
-                    return Integer.parseInt(raw.trim());
-                } catch (NumberFormatException ex) {
-                    throw new BusinessException("INVALID_STORE_HEADER",
-                            "El header X-Store-Id debe ser numerico", HttpStatus.BAD_REQUEST);
-                }
-            }
+        Integer storeId = principal().storeId();
+        if (storeId == null) {
+            throw new BusinessException("STORE_SCOPE_REQUIRED",
+                    "A store-scoped account is required for this operation.", HttpStatus.FORBIDDEN);
         }
-        return DEFAULT_STORE_ID;
+        return storeId;
+    }
+
+    public Integer currentUserId() {
+        return principal().userId();
+    }
+
+    public AuthPrincipal currentIdentity() {
+        return principal();
+    }
+
+    public Integer currentCustomerId() {
+        AuthPrincipal identity = principal();
+        if (!"CUSTOMER".equals(identity.role()) || identity.customerId() == null) {
+            throw new BusinessException("CUSTOMER_SCOPE_REQUIRED",
+                    "A customer account is required for this operation.", HttpStatus.FORBIDDEN);
+        }
+        return identity.customerId();
+    }
+
+    public String currentRole() {
+        return principal().role();
+    }
+
+    public boolean isStoreAdmin() {
+        return "STORE_ADMIN".equals(currentRole());
+    }
+
+    public boolean isCustomer() {
+        return "CUSTOMER".equals(currentRole());
+    }
+
+    public void requireCustomerOwner(Integer customerId) {
+        if (isCustomer() && !currentCustomerId().equals(customerId)) {
+            throw new BusinessException("CUSTOMER_SCOPE_VIOLATION",
+                    "The requested customer record is outside your account.", HttpStatus.FORBIDDEN);
+        }
+    }
+
+    private AuthPrincipal principal() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.isAuthenticated()
+                && authentication.getPrincipal() instanceof AuthPrincipal identity) {
+            return identity;
+        }
+        throw new BusinessException("UNAUTHENTICATED",
+                "Authentication is required.", HttpStatus.UNAUTHORIZED);
     }
 }

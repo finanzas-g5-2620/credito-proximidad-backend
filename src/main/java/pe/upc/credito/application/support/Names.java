@@ -2,7 +2,7 @@ package pe.upc.credito.application.support;
 
 import pe.upc.credito.infrastructure.persistence.entity.UserEntity;
 
-/** Nombre completo para los DTOs (users.first_name + users.last_name). */
+/** Formats account names for API responses. */
 public final class Names {
 
     private Names() {
