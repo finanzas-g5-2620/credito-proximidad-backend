@@ -20,4 +20,5 @@ node_modules/
 # Entorno
 docker-compose*.yml
 .env
+.env.*
 *.log

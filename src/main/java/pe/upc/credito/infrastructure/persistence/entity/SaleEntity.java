@@ -12,6 +12,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 
 /** Tabla 5 - sales (encabezado transaccional). */
 @Entity
@@ -50,4 +51,22 @@ public class SaleEntity {
     /** V2: TEA efectiva pactada (NULL en ventas al contado). */
     @Column(name = "tea", precision = 12, scale = 7)
     private BigDecimal tea;
+
+    @Column(name = "penalty_tea", precision = 12, scale = 7)
+    private BigDecimal penaltyTea;
+
+    @Column(name = "settlement_id")
+    private Integer settlementId;
+
+    @Column(name = "billing_cutoff_date")
+    private LocalDate billingCutoffDate;
+
+    @Column(name = "first_due_date")
+    private LocalDate firstDueDate;
+
+    @Column(name = "idempotency_key", length = 100)
+    private String idempotencyKey;
+
+    @Column(name = "request_fingerprint", length = 64)
+    private String requestFingerprint;
 }

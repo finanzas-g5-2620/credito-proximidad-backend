@@ -53,4 +53,13 @@ public class PaymentEntity {
     /** V2: referencia externa de YAPE / transferencia. */
     @Column(name = "reference_number", length = 50)
     private String referenceNumber;
+
+    @Column(name = "received_amount", precision = 12, scale = 2)
+    private BigDecimal receivedAmount;
+
+    @Column(name = "favour_balance_after", precision = 12, scale = 2)
+    private BigDecimal favourBalanceAfter;
+
+    @Column(name = "idempotency_key", length = 100)
+    private String idempotencyKey;
 }

@@ -15,7 +15,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/analytics")
-@Tag(name = "Analitica", description = "Indicadores ejecutivos y auditoria de cartera")
+@Tag(name = "Analytics", description = "Store indicators and recent account activity")
 public class AnalyticsController {
 
     private final AnalyticsService analyticsService;
@@ -27,22 +27,22 @@ public class AnalyticsController {
     }
 
     @GetMapping("/kpis")
-    @Operation(summary = "Indicadores ejecutivos",
-            description = "Ingresos por ventas, cartera vencida, cuentas activas y tasa de morosidad.")
+    @Operation(summary = "Read key indicators",
+            description = "Returns sales, balances past due, accounts and the delinquency ratio.")
     public DashboardKpisResponseDto kpis() {
         return analyticsService.kpis(tenant.currentStoreId());
     }
 
     @GetMapping("/monthly-flows")
-    @Operation(summary = "Flujo mensual de 12 meses",
-            description = "Ventas emitidas y cobros recibidos por mes, ordenados cronologicamente.")
+    @Operation(summary = "Read 12 months of sales and collections",
+            description = "Lists monthly totals in chronological order using the Lima business calendar.")
     public List<MonthlyFlowResponseDto> monthlyFlows() {
         return analyticsService.monthlyFlows(tenant.currentStoreId());
     }
 
     @GetMapping("/movements")
-    @Operation(summary = "Bitacora de movimientos",
-            description = "Ventas, cortes y pagos recientes ordenados del mas nuevo al mas antiguo (maximo 100).")
+    @Operation(summary = "List recent movements",
+            description = "Returns up to 100 sales, billing and payment movements, newest first.")
     public List<AuditMovementResponseDto> movements() {
         return analyticsService.movements(tenant.currentStoreId());
     }

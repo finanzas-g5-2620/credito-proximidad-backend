@@ -49,11 +49,23 @@ public class CustomerEntity {
     @Column(name = "payment_due_day", nullable = false)
     private Integer paymentDueDay;
 
+    @Column(name = "compensatory_rate_period_days", nullable = false)
+    private Integer compensatoryRatePeriodDays;
+
+    @Column(name = "compensatory_capitalization_days")
+    private Integer compensatoryCapitalizationDays;
+
     @Column(name = "compensatory_rate_type", nullable = false, length = 10)
     private String compensatoryRateType;
 
     @Column(name = "compensatory_rate_value", nullable = false, precision = 12, scale = 7)
     private BigDecimal compensatoryRateValue;
+
+    @Column(name = "penalty_rate_period_days", nullable = false)
+    private Integer penaltyRatePeriodDays;
+
+    @Column(name = "penalty_capitalization_days")
+    private Integer penaltyCapitalizationDays;
 
     @Column(name = "penalty_rate_type", nullable = false, length = 10)
     private String penaltyRateType;

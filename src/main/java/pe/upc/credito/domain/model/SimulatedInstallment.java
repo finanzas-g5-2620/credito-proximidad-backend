@@ -3,10 +3,7 @@ package pe.upc.credito.domain.model;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
-/**
- * Cuota simulada del cronograma frances.
- * Los importes ya vienen redondeados a 2 decimales (HALF_UP).
- */
+/** Scheduled payment row or grace-period accrual. */
 public record SimulatedInstallment(
         int installmentNumber,
         LocalDate dueDate,

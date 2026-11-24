@@ -2,10 +2,10 @@ package pe.upc.credito.application.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-@Schema(name = "RunCutoffResponse", description = "Resultado de la ejecucion del corte mensual")
+@Schema(name = "RunCutoffResponse", description = "Result of processing completed billing cycles")
 public record RunCutoffResponseDto(
 
-        @Schema(example = "Corte ejecutado para el periodo 2026-12: 3 liquidaciones generadas")
+        @Schema(example = "Billing cutoff generated three statements")
         String message,
 
         @Schema(example = "3") int generatedCount

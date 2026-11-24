@@ -27,7 +27,7 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -36,23 +36,11 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/**
- * Indicadores del dashboard gerencial (MIS).
- *
- * <p>Definiciones:</p>
- * <ul>
- *   <li>{@code total_revenue}: suma de las ventas del tenant (excluye anuladas).</li>
- *   <li>{@code overdue_portfolio}: saldo pendiente de liquidaciones vencidas.</li>
- *   <li>{@code active_accounts}: clientes registrados en la tienda.</li>
- *   <li>{@code default_rate}: capital vencido / cartera total de capital,
- *       expresado en porcentaje con 7 decimales.</li>
- *   <li>Flujos: 12 meses moviles; ventas por fecha de emision y cobros por
- *       fecha de pago.</li>
- * </ul>
- */
+/** Builds store analytics from persisted sales, settlements and collections. */
 @Service
 public class AnalyticsService {
 
+    private static final ZoneId BUSINESS_ZONE = ZoneId.of("America/Lima");
     private static final int MONTHS = 12;
     private static final int MOVEMENT_LIMIT = 100;
 
@@ -90,7 +78,7 @@ public class AnalyticsService {
 
         List<SaleEntity> saleList = sales.findByStoreId(storeId);
         BigDecimal totalRevenue = saleList.stream()
-                .filter(sale -> !"ANULADA".equals(sale.getSaleStatus()))
+                .filter(sale -> !"CANCELLED".equals(sale.getSaleStatus()))
                 .map(SaleEntity::getTotalAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
@@ -111,7 +99,8 @@ public class AnalyticsService {
         for (MonthlySettlementEntity settlement : settlementList) {
             BigDecimal paidPrincipal = paidPrincipalBySettlement
                     .getOrDefault(settlement.getSettlementId(), BigDecimal.ZERO);
-            BigDecimal pendingPrincipal = settlement.getMonthInstallmentsAmount()
+            BigDecimal pendingPrincipal = settlement.getMonthPurchasesAmount()
+                    .add(settlement.getMonthInstallmentsAmount())
                     .subtract(paidPrincipal)
                     .max(BigDecimal.ZERO);
 
@@ -126,13 +115,16 @@ public class AnalyticsService {
         }
 
         BigDecimal unbilledPrincipal = schedules.sumUnbilledPrincipalByStore(storeId);
-        BigDecimal totalPortfolio = outstandingPrincipal.add(
-                unbilledPrincipal == null ? BigDecimal.ZERO : unbilledPrincipal);
+        BigDecimal unbilledPurchases = saleList.stream()
+                .filter(sale -> "MONTH_END".equals(sale.getPaymentMode())
+                        && sale.getSettlementId() == null && !"CANCELLED".equals(sale.getSaleStatus()))
+                .map(SaleEntity::getTotalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalPortfolio = outstandingPrincipal.add(unbilledPrincipal).add(unbilledPurchases);
 
         BigDecimal defaultRate = totalPortfolio.signum() == 0
                 ? BigDecimal.ZERO
-                : overduePrincipal.multiply(BigDecimal.valueOf(100))
-                        .divide(totalPortfolio, Amounts.RATE_SCALE, RoundingMode.HALF_UP);
+                : overduePrincipal.divide(totalPortfolio, Amounts.RATE_SCALE, RoundingMode.HALF_UP);
 
         BigDecimal overduePortfolio = settlements.findOverdueByStore(storeId, today).stream()
                 .map(MonthlySettlementEntity::getPendingBalance)
@@ -159,6 +151,9 @@ public class AnalyticsService {
         }
 
         for (SaleEntity sale : sales.findByStoreId(storeId)) {
+            if ("CANCELLED".equals(sale.getSaleStatus())) {
+                continue;
+            }
             YearMonth month = toYearMonth(sale.getSaleDatetime());
             BigDecimal[] bucket = flows.get(month);
             if (bucket != null) {
@@ -211,21 +206,23 @@ public class AnalyticsService {
                     sale.getSaleId().longValue(),
                     sale.getSaleDatetime(),
                     MovementEventType.SALE_CREATED,
-                    customerNames.getOrDefault(sale.getCustomerId(), "Cliente " + sale.getCustomerId()),
+                    customerNames.getOrDefault(sale.getCustomerId(), "Customer " + sale.getCustomerId()),
                     sale.getTotalAmount(),
-                    "Venta " + ApiCodes.sale(sale.getSaleId()) + " (" + sale.getPaymentMode() + ")"));
+                    ApiCodes.sale(sale.getSaleId()),
+                    "Sale " + ApiCodes.sale(sale.getSaleId()) + " (" + sale.getPaymentMode() + ")"));
         }
 
         for (MonthlySettlementEntity settlement : settlementList) {
             movements.add(new Movement(
                     1_000_000L + settlement.getSettlementId(),
-                    settlement.getCutoffDate().atStartOfDay(ZoneOffset.UTC).toInstant(),
+                    settlement.getCutoffDate().atStartOfDay(BUSINESS_ZONE).toInstant(),
                     MovementEventType.SETTLEMENT_CUTOFF,
                     customerNames.getOrDefault(settlement.getCustomerId(),
-                            "Cliente " + settlement.getCustomerId()),
+                            "Customer " + settlement.getCustomerId()),
                     settlement.getTotalAmountDue(),
-                    "Liquidacion " + ApiCodes.settlement(settlement.getSettlementId())
-                            + " del periodo " + settlement.getPeriodYear()
+                    ApiCodes.settlement(settlement.getSettlementId()),
+                    "Settlement " + ApiCodes.settlement(settlement.getSettlementId())
+                            + " for period " + settlement.getPeriodYear()
                             + "-" + "%02d".formatted(settlement.getPeriodMonth())));
         }
 
@@ -233,15 +230,16 @@ public class AnalyticsService {
             MonthlySettlementEntity settlement = settlementsById.get(payment.getSettlementId());
             Integer customerId = settlement == null ? null : settlement.getCustomerId();
             String customerName = customerId == null
-                    ? "Cliente"
-                    : customerNames.getOrDefault(customerId, "Cliente " + customerId);
+                    ? "Customer"
+                    : customerNames.getOrDefault(customerId, "Customer " + customerId);
             movements.add(new Movement(
                     2_000_000L + payment.getPaymentId(),
                     payment.getPaymentDatetime(),
                     MovementEventType.PAYMENT_RECEIVED,
                     customerName,
                     payment.getAmountPaid(),
-                    "Pago " + ApiCodes.payment(payment.getPaymentId())
+                    ApiCodes.payment(payment.getPaymentId()),
+                    "Payment " + ApiCodes.payment(payment.getPaymentId())
                             + " (" + payment.getPaymentMethod() + ")"));
         }
 
@@ -255,12 +253,13 @@ public class AnalyticsService {
                         movement.eventType(),
                         movement.customerName(),
                         Amounts.money(movement.amount()),
-                        movement.description()))
+                        movement.description(),
+                        movement.referenceCode()))
                 .toList();
     }
 
     // ------------------------------------------------------------------
-    // Apoyo
+    // Internal model
     // ------------------------------------------------------------------
 
     private record Movement(long id,
@@ -268,10 +267,11 @@ public class AnalyticsService {
                             MovementEventType eventType,
                             String customerName,
                             BigDecimal amount,
+                            String referenceCode,
                             String description) {
     }
 
     private YearMonth toYearMonth(Instant instant) {
-        return YearMonth.from(instant.atZone(ZoneOffset.UTC).toLocalDate());
+        return YearMonth.from(instant.atZone(BUSINESS_ZONE).toLocalDate());
     }
 }

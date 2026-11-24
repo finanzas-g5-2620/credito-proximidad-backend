@@ -2,28 +2,28 @@ package pe.upc.credito.application.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-@Schema(name = "SimulatedInstallment", description = "Cuota simulada del cronograma frances")
+@Schema(name = "SimulatedInstallment", description = "A projected installment or grace row")
 public record SimulatedInstallmentDto(
 
-        @Schema(description = "Numero de cuota; 0 = periodo de gracia", example = "1")
+        @Schema(description = "Installment number. Zero denotes the grace period.", example = "1")
         int installment_number,
 
-        @Schema(description = "Fecha de vencimiento", example = "2026-12-05")
+        @Schema(description = "Due date", example = "2026-12-05")
         String due_date,
 
-        @Schema(description = "Cuota fija R", example = "525.52")
+        @Schema(description = "Payment amount", example = "525.56")
         String payment_amount,
 
-        @Schema(description = "Amortizacion de capital A", example = "494.92")
+        @Schema(description = "Principal repaid", example = "494.96")
         String principal_amount,
 
-        @Schema(description = "Interes compensatorio I", example = "30.60")
+        @Schema(description = "Compensatory interest", example = "30.60")
         String interest_amount,
 
-        @Schema(description = "Saldo de capital S", example = "1020.15")
+        @Schema(description = "Remaining principal", example = "1020.11")
         String balance_amount,
 
-        @Schema(description = "true si la fila corresponde al periodo de gracia", example = "false")
+        @Schema(description = "Whether this row represents the grace period", example = "false")
         boolean is_grace_period
 ) {
 }

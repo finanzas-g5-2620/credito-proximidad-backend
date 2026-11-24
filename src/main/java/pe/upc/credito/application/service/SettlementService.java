@@ -12,10 +12,12 @@ import pe.upc.credito.application.exception.BusinessException;
 import pe.upc.credito.application.exception.ResourceNotFoundException;
 import pe.upc.credito.application.support.Amounts;
 import pe.upc.credito.application.support.ApiCodes;
+import pe.upc.credito.application.support.BillingCalendar;
 import pe.upc.credito.application.support.Names;
 import pe.upc.credito.application.support.SimulatedClock;
+import pe.upc.credito.application.support.TenantContext;
 import pe.upc.credito.domain.enums.InstallmentStatus;
-import pe.upc.credito.domain.enums.RateType;
+import pe.upc.credito.domain.enums.PaymentMode;
 import pe.upc.credito.domain.enums.SaleStatus;
 import pe.upc.credito.domain.enums.SettlementStatus;
 import pe.upc.credito.domain.service.FinancialMathEngine;
@@ -37,9 +39,12 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.YearMonth;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
-import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -47,34 +52,13 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/**
- * Casos de uso de cobranza: corte mensual, estado de cuenta, cotizacion de
- * cancelacion y registro de pagos con prelacion legal.
- *
- * <p>Decisiones de negocio:</p>
- * <ul>
- *   <li><b>Corte:</b> el estado de cuenta del periodo se emite con fecha de
- *       corte {@code hoy} y factura las cuotas cuyo vencimiento cae en el mes
- *       siguiente (igual que el mock: corte 25/10, vencimiento 05/11). Asi se
- *       respeta el CHECK {@code payment_due_date >= cutoff_date} del cap. 8.</li>
- *   <li><b>Prelacion Art. 1257 C.C.:</b> mora/penalidad, luego interes
- *       compensatorio y finalmente capital.</li>
- *   <li><b>Mora:</b> se calcula sobre el capital pendiente con la TEA
- *       moratoria del cliente. La penalidad acumulada se persiste en
- *       {@code penalty_interest_amount} antes de imputar el pago.</li>
- *   <li><b>Pago parcial:</b> rechazado (cap. 7.5). El abono debe cubrir la
- *       totalidad del saldo exigible; si es menor, la operacion no se registra.</li>
- *   <li><b>Sobre-pago:</b> aceptado (cap. 7.5). El excedente no se imputa a la
- *       liquidacion: se acumula en {@code customers.favour_balance} como saldo
- *       a favor del consumidor. La fila de {@code payments} registra como
- *       {@code amount_paid} solo el importe aplicado a la deuda para respetar
- *       el CHECK {@code ck_payment_imputation}.</li>
- * </ul>
- */
+/** Billing, payoff quotes and full payment with statutory imputation. */
 @Service
 public class SettlementService {
 
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
+    private static final String STORE_ADMIN = "STORE_ADMIN";
+    private static final String CUSTOMER = "CUSTOMER";
 
     private final MonthlySettlementRepository settlements;
     private final CustomerRepository customers;
@@ -84,6 +68,7 @@ public class SettlementService {
     private final SaleRepository sales;
     private final FinancialMathEngine engine;
     private final SimulatedClock clock;
+    private final TenantContext tenant;
 
     public SettlementService(MonthlySettlementRepository settlements,
                              CustomerRepository customers,
@@ -92,7 +77,8 @@ public class SettlementService {
                              PaymentRepository payments,
                              SaleRepository sales,
                              FinancialMathEngine engine,
-                             SimulatedClock clock) {
+                             SimulatedClock clock,
+                             TenantContext tenant) {
         this.settlements = settlements;
         this.customers = customers;
         this.users = users;
@@ -101,136 +87,116 @@ public class SettlementService {
         this.sales = sales;
         this.engine = engine;
         this.clock = clock;
+        this.tenant = tenant;
     }
 
-    // ------------------------------------------------------------------
-    // GET /settlements y GET /settlements/{id}
-    // ------------------------------------------------------------------
-
     @Transactional(readOnly = true)
-    public List<SettlementResponseDto> list(Integer storeId) {
-        List<MonthlySettlementEntity> settlementList = settlements.findByStore(storeId);
-        if (settlementList.isEmpty()) {
+    public List<SettlementResponseDto> list() {
+        Integer storeId = tenant.currentStoreId();
+        List<MonthlySettlementEntity> rows = CUSTOMER.equals(tenant.currentRole())
+                ? settlements.findByCustomerIdAndStoreIdOrderByCutoffDateDesc(
+                        tenant.currentCustomerId(), storeId)
+                : settlements.findByStore(storeId);
+        if (rows.isEmpty()) {
             return List.of();
         }
-
-        Map<Integer, List<PaymentEntity>> paymentsBySettlement = payments.findByStore(storeId).stream()
-                .collect(Collectors.groupingBy(PaymentEntity::getSettlementId));
-
-        Map<Integer, CustomerEntity> customersById = customers.findAllById(
-                        settlementList.stream().map(MonthlySettlementEntity::getCustomerId).distinct().toList())
-                .stream()
-                .collect(Collectors.toMap(CustomerEntity::getCustomerId, Function.identity()));
-
-        Map<Integer, UserEntity> usersById = users.findAllById(
-                        customersById.values().stream().map(CustomerEntity::getUserId).distinct().toList())
-                .stream()
-                .collect(Collectors.toMap(UserEntity::getUserId, Function.identity()));
-
-        return settlementList.stream()
-                .map(settlement -> {
-                    CustomerEntity customer = customersById.get(settlement.getCustomerId());
-                    UserEntity user = customer == null ? null : usersById.get(customer.getUserId());
-                    return toDto(settlement, customer, user,
-                            paymentsBySettlement.getOrDefault(settlement.getSettlementId(), List.of()));
-                })
-                .toList();
+        List<Integer> ids = rows.stream().map(MonthlySettlementEntity::getSettlementId).toList();
+        Map<Integer, List<PaymentEntity>> history = payments.findBySettlementIdInOrderByPaymentDatetimeAsc(ids)
+                .stream().collect(Collectors.groupingBy(PaymentEntity::getSettlementId));
+        Map<Integer, CustomerEntity> customerMap = customers.findAllById(
+                        rows.stream().map(MonthlySettlementEntity::getCustomerId).distinct().toList())
+                .stream().collect(Collectors.toMap(CustomerEntity::getCustomerId, Function.identity()));
+        Map<Integer, UserEntity> userMap = users.findAllById(customerMap.values().stream()
+                        .map(CustomerEntity::getUserId).distinct().toList())
+                .stream().collect(Collectors.toMap(UserEntity::getUserId, Function.identity()));
+        return rows.stream().map(row -> {
+            CustomerEntity customer = customerMap.get(row.getCustomerId());
+            return toDto(row, customer,
+                    customer == null ? null : userMap.get(customer.getUserId()),
+                    history.getOrDefault(row.getSettlementId(), List.of()));
+        }).toList();
     }
 
     @Transactional(readOnly = true)
-    public SettlementResponseDto get(Integer settlementId, Integer storeId) {
-        MonthlySettlementEntity settlement = requireSettlement(settlementId, storeId);
+    public SettlementResponseDto get(Integer settlementId) {
+        MonthlySettlementEntity settlement = requireSettlement(settlementId, false);
         CustomerEntity customer = customers.findById(settlement.getCustomerId()).orElse(null);
         UserEntity user = customer == null ? null : users.findById(customer.getUserId()).orElse(null);
-        List<PaymentEntity> history = payments.findBySettlementIdOrderByPaymentDatetimeAsc(settlementId);
-        return toDto(settlement, customer, user, history);
+        return toDto(settlement, customer, user,
+                payments.findBySettlementIdOrderByPaymentDatetimeAsc(settlementId));
     }
 
-    // ------------------------------------------------------------------
-    // GET /settlements/{id}/payoff-quote
-    // ------------------------------------------------------------------
-
     @Transactional(readOnly = true)
-    public PayoffQuoteResponseDto payoffQuote(Integer settlementId, Integer storeId, String targetDate) {
-        MonthlySettlementEntity settlement = requireSettlement(settlementId, storeId);
+    public PayoffQuoteResponseDto payoffQuote(Integer settlementId, String targetDate) {
+        MonthlySettlementEntity settlement = requireSettlement(settlementId, false);
         if (isPaid(settlement)) {
-            throw new BusinessException("SETTLEMENT_ALREADY_PAID",
-                    "La liquidacion " + ApiCodes.settlement(settlementId) + " ya fue cancelada",
+            throw new BusinessException("SETTLEMENT_ALREADY_PAID", "The settlement is already paid",
                     HttpStatus.CONFLICT);
         }
-
-        CustomerEntity customer = customers.findById(settlement.getCustomerId())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Cliente no encontrado: " + settlement.getCustomerId()));
-
+        CustomerEntity customer = customers.findByCustomerIdAndStoreId(
+                        settlement.getCustomerId(), tenant.currentStoreId())
+                .orElseThrow(() -> new ResourceNotFoundException("Customer not found"));
         LocalDate calculationDate = parseDate(targetDate, clock.today());
         List<PaymentEntity> history = payments.findBySettlementIdOrderByPaymentDatetimeAsc(settlementId);
         Quote quote = quote(settlement, customer, calculationDate, history);
-
-        return new PayoffQuoteResponseDto(
-                settlement.getSettlementId(),
-                calculationDate.toString(),
-                quote.daysOverdue(),
-                Amounts.money(quote.principal()),
-                Amounts.money(quote.interest()),
-                Amounts.money(quote.moratorium()),
-                Amounts.money(quote.total()));
+        return new PayoffQuoteResponseDto(settlementId, calculationDate.toString(), quote.daysOverdue(),
+                Amounts.money(quote.principal()), Amounts.money(quote.interest()),
+                Amounts.money(quote.moratorium()), Amounts.money(quote.total()));
     }
 
-    // ------------------------------------------------------------------
-    // POST /settlements/{id}/pay
-    // ------------------------------------------------------------------
-
     @Transactional
-    public PaymentResponseDto pay(Integer settlementId, Integer storeId, PaymentRequestDto request) {
-        MonthlySettlementEntity settlement = requireSettlement(settlementId, storeId);
-        if (isPaid(settlement)) {
-            throw new BusinessException("SETTLEMENT_ALREADY_PAID",
-                    "La liquidacion " + ApiCodes.settlement(settlementId) + " ya fue cancelada",
-                    HttpStatus.CONFLICT);
+    public PaymentResponseDto pay(Integer settlementId, PaymentRequestDto request, String rawIdempotencyKey) {
+        requireStoreAdmin();
+        Integer storeId = tenant.currentStoreId();
+        String idempotencyKey = normalizeKey(rawIdempotencyKey);
+        if (idempotencyKey == null) {
+            throw new BusinessException("IDEMPOTENCY_KEY_REQUIRED",
+                    "Idempotency-Key is required for payment registration", HttpStatus.BAD_REQUEST);
         }
 
-        CustomerEntity customer = customers.findById(settlement.getCustomerId())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Cliente no encontrado: " + settlement.getCustomerId()));
-
-        BigDecimal amount = Amounts.money(request.amount());
-        if (amount.signum() <= 0) {
-            throw new BusinessException("INVALID_AMOUNT", "El monto debe ser mayor a cero",
+        MonthlySettlementEntity settlement = settlements.findByIdAndStoreForUpdate(settlementId, storeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Settlement not found: " + settlementId));
+        BigDecimal amountReceived = Amounts.money(request.amount());
+        String reference = normalizeReference(request.reference_number());
+        var previous = payments.findBySettlementIdAndIdempotencyKey(settlementId, idempotencyKey);
+        if (previous.isPresent()) {
+            PaymentEntity payment = previous.get();
+            if (payment.getReceivedAmount().compareTo(amountReceived) != 0
+                    || !payment.getPaymentMethod().equals(request.payment_method().name())
+                    || !Objects.equals(payment.getReferenceNumber(), reference)) {
+                throw new BusinessException("IDEMPOTENCY_KEY_REUSED",
+                        "Idempotency-Key was already used with a different payment", HttpStatus.CONFLICT);
+            }
+            return toPaymentDto(payment);
+        }
+        if (isPaid(settlement)) {
+            throw new BusinessException("SETTLEMENT_ALREADY_PAID", "The settlement is already paid",
+                    HttpStatus.CONFLICT);
+        }
+        if (amountReceived.signum() <= 0) {
+            throw new BusinessException("INVALID_AMOUNT", "The amount must be greater than zero",
                     HttpStatus.BAD_REQUEST);
         }
 
+        CustomerEntity customer = customers.findByCustomerIdAndStoreIdForUpdate(
+                        settlement.getCustomerId(), storeId)
+                .orElseThrow(() -> new ResourceNotFoundException("Customer not found"));
         LocalDate today = clock.today();
         List<PaymentEntity> history = payments.findBySettlementIdOrderByPaymentDatetimeAsc(settlementId);
         Quote quote = quote(settlement, customer, today, history);
         BigDecimal totalDue = quote.total();
-
-        if (totalDue.signum() == 0) {
-            throw new BusinessException("SETTLEMENT_ALREADY_PAID",
-                    "La liquidacion " + ApiCodes.settlement(settlementId)
-                            + " no tiene saldo exigible pendiente",
+        if (totalDue.signum() <= 0) {
+            throw new BusinessException("SETTLEMENT_ALREADY_PAID", "The settlement has no balance due",
                     HttpStatus.CONFLICT);
         }
-
-        // Cap. 7.5: el sistema no admite pagos parciales. El importe recibido
-        // debe cubrir la totalidad de la deuda exigible consolidada.
-        if (amount.compareTo(totalDue) < 0) {
+        if (amountReceived.compareTo(totalDue) < 0) {
             throw new BusinessException("PARTIAL_PAYMENT_REJECTED",
-                    "La politica de cobranza exige la cancelacion integral de la liquidacion (S/ "
-                            + Amounts.money(totalDue) + "). Se recibio: S/ "
-                            + Amounts.money(amount) + ".",
+                    "The received amount must cover the full amount due: PEN " + Amounts.money(totalDue),
                     HttpStatus.UNPROCESSABLE_ENTITY);
         }
 
-        // Cap. 7.5: el excedente se registra como saldo a favor del consumidor.
-        // La imputacion (y el CHECK ck_payment_imputation) solo considera el
-        // importe aplicado a la deuda.
-        BigDecimal received = amount;
         BigDecimal applied = totalDue;
-        BigDecimal surplus = received.subtract(applied)
-                .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
-
-        // Prelacion legal Art. 1257 C.C.: mora -> interes compensatorio -> capital
+        BigDecimal surplus = amountReceived.subtract(applied).setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
         BigDecimal available = applied;
         BigDecimal toPenalty = available.min(quote.moratorium());
         available = available.subtract(toPenalty);
@@ -239,183 +205,157 @@ public class SettlementService {
         BigDecimal toPrincipal = available.min(quote.principal());
         available = available.subtract(toPrincipal);
         if (available.signum() != 0) {
-            // Protege el CHECK del pago: la imputacion debe agotar el importe aplicado.
-            throw new BusinessException("INVALID_IMPUTATION",
-                    "No fue posible imputar el pago a la liquidacion", HttpStatus.CONFLICT);
+            throw new BusinessException("INVALID_IMPUTATION", "Payment could not be fully allocated",
+                    HttpStatus.CONFLICT);
         }
 
+        BigDecimal favour = safe(customer.getFavourBalance()).add(surplus)
+                .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
         PaymentEntity payment = new PaymentEntity();
         payment.setSettlementId(settlementId);
         payment.setPaymentDatetime(clock.now());
         payment.setAmountPaid(applied);
+        payment.setReceivedAmount(amountReceived);
+        payment.setFavourBalanceAfter(favour);
         payment.setCalculatedOverdueDays(quote.daysOverdue());
         payment.setAllocatedToPenalty(toPenalty);
         payment.setAllocatedToInterest(toInterest);
         payment.setAllocatedToPrincipal(toPrincipal);
         payment.setPaymentMethod(request.payment_method().name());
-        payment.setReferenceNumber(normalizeReference(request.reference_number()));
+        payment.setReferenceNumber(reference);
+        payment.setIdempotencyKey(idempotencyKey);
         payments.saveAndFlush(payment);
 
-        if (surplus.signum() > 0) {
-            BigDecimal currentFavour = customer.getFavourBalance() == null
-                    ? ZERO
-                    : customer.getFavourBalance();
-            customer.setFavourBalance(currentFavour.add(surplus)
-                    .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP));
-            customers.save(customer);
-        }
+        customer.setFavourBalance(favour);
+        customers.save(customer);
 
-        BigDecimal newPending = totalDue.subtract(applied)
-                .max(ZERO)
-                .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
-        boolean fullyPaid = newPending.signum() == 0;
-        boolean overdue = today.isAfter(settlement.getPaymentDueDate());
-
-        // Las columnas de la liquidacion guardan importes acumulados:
-        // total_amount_due - paid_amount = pending_balance. La penalidad se
-        // acumula y luego se le resta lo ya imputado a mora.
-        BigDecimal previousPaid = settlement.getPaidAmount();
+        BigDecimal previousPaid = safe(settlement.getPaidAmount());
         BigDecimal paidPenaltyBefore = sumPayments(history, PaymentEntity::getAllocatedToPenalty);
-
         settlement.setPenaltyInterestAmount(quote.moratorium().add(paidPenaltyBefore)
                 .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP));
-        settlement.setPaidAmount(previousPaid.add(applied)
-                .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP));
-        settlement.setTotalAmountDue(previousPaid.add(totalDue)
-                .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP));
-        settlement.setPendingBalance(newPending);
-        settlement.setSettlementStatus(fullyPaid
-                ? SettlementStatus.PAGADA_TOTAL.name()
-                : (overdue ? SettlementStatus.EN_MORA.name() : SettlementStatus.EMITIDA.name()));
+        settlement.setPaidAmount(previousPaid.add(applied).setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP));
+        settlement.setTotalAmountDue(previousPaid.add(totalDue).setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP));
+        settlement.setPendingBalance(ZERO);
+        settlement.setSettlementStatus(SettlementStatus.PAID.name());
         settlements.save(settlement);
 
         List<AmortizationScheduleEntity> billedRows =
                 schedules.findBySettlementIdOrderByInstallmentNumberAsc(settlementId);
-        if (fullyPaid) {
-            for (AmortizationScheduleEntity row : billedRows) {
-                row.setInstallmentStatus(InstallmentStatus.PAGADA.name());
-            }
-            schedules.saveAll(billedRows);
-            completeSalesIfPaid(billedRows);
-        } else if (overdue) {
-            for (AmortizationScheduleEntity row : billedRows) {
-                row.setInstallmentStatus(InstallmentStatus.EN_MORA.name());
-            }
-            schedules.saveAll(billedRows);
-        }
-
-        BigDecimal favourBalance = customer.getFavourBalance() == null
-                ? ZERO
-                : customer.getFavourBalance();
-
-        return new PaymentResponseDto(
-                payment.getPaymentId(),
-                ApiCodes.payment(payment.getPaymentId()),
-                settlementId,
-                settlement.getCustomerId(),
-                Amounts.money(applied),
-                payment.getPaymentDatetime().toString(),
-                request.payment_method(),
-                payment.getReferenceNumber(),
-                ApiCodes.receipt(payment.getPaymentId()),
-                Amounts.money(received),
-                Amounts.money(favourBalance));
+        billedRows.forEach(row -> row.setInstallmentStatus(InstallmentStatus.PAID.name()));
+        schedules.saveAll(billedRows);
+        completeSalesIfPaid(billedRows, settlementId);
+        return toPaymentDto(payment);
     }
 
-    // ------------------------------------------------------------------
-    // POST /__mock/run-cutoff
-    // ------------------------------------------------------------------
-
     @Transactional
-    public RunCutoffResponseDto runCutoff(Integer storeId) {
+    public RunCutoffResponseDto runCutoff() {
+        requireStoreAdmin();
+        return runCutoffForStore(tenant.currentStoreId());
+    }
+
+    /** Internal scheduler entry point; web callers must use the authorized wrapper above. */
+    @Transactional
+    public RunCutoffResponseDto runCutoffForStore(Integer storeId) {
+        if (storeId == null || storeId <= 0) {
+            throw new BusinessException("STORE_CONTEXT_REQUIRED", "A valid store is required for cutoff",
+                    HttpStatus.BAD_REQUEST);
+        }
         LocalDate today = clock.today();
-        YearMonth cutoffPeriod = YearMonth.from(today);
-        YearMonth billingPeriod = cutoffPeriod.plusMonths(1);
-        LocalDate from = billingPeriod.atDay(1);
-        LocalDate to = billingPeriod.atEndOfMonth();
+        LocalDate closedThroughDate = today.minusDays(1);
+        List<AmortizationScheduleEntity> candidateRows =
+                schedules.findUnbilledByStore(storeId, closedThroughDate);
+        List<SaleEntity> candidatePurchases =
+                sales.findUnbilledMonthEndByStore(storeId, closedThroughDate);
+
+        Map<Integer, SaleEntity> salesById = sales.findAllById(candidateRows.stream()
+                        .map(AmortizationScheduleEntity::getSaleId).distinct().toList())
+                .stream().collect(Collectors.toMap(SaleEntity::getSaleId, Function.identity()));
+        Set<CutoffKey> keys = new java.util.HashSet<>();
+        for (AmortizationScheduleEntity row : candidateRows) {
+            SaleEntity sale = salesById.get(row.getSaleId());
+            if (sale != null && row.getBillingCutoffDate() != null) {
+                keys.add(new CutoffKey(sale.getCustomerId(), row.getBillingCutoffDate()));
+            }
+        }
+        candidatePurchases.stream()
+                .filter(sale -> sale.getBillingCutoffDate() != null)
+                .forEach(sale -> keys.add(new CutoffKey(sale.getCustomerId(), sale.getBillingCutoffDate())));
+        List<CutoffKey> orderedKeys = keys.stream()
+                .sorted(Comparator.comparing(CutoffKey::cutoffDate).thenComparing(CutoffKey::customerId))
+                .toList();
 
         int generated = 0;
-        for (CustomerEntity customer : customers.findByStoreIdOrderByCustomerIdAsc(storeId)) {
-            boolean alreadyBilled = settlements
-                    .findByCustomerIdAndPeriodYearAndPeriodMonth(
-                            customer.getCustomerId(), cutoffPeriod.getYear(), cutoffPeriod.getMonthValue())
-                    .isPresent();
-            if (alreadyBilled) {
+        for (CutoffKey key : orderedKeys) {
+            CustomerEntity customer = customers.findByCustomerIdAndStoreIdForUpdate(key.customerId(), storeId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Customer not found: " + key.customerId()));
+            YearMonth period = YearMonth.from(key.cutoffDate());
+            if (settlements.findByCustomerIdAndPeriodYearAndPeriodMonth(
+                    customer.getCustomerId(), period.getYear(), period.getMonthValue()).isPresent()) {
+                continue;
+            }
+            // Re-read after taking the customer lock. A sale committed while this
+            // cutoff waited for the lock must be included in the same run.
+            List<AmortizationScheduleEntity> rows = schedules.findUnbilledByCustomerAndStore(
+                            customer.getCustomerId(), storeId, closedThroughDate).stream()
+                    .filter(row -> key.cutoffDate().equals(row.getBillingCutoffDate()))
+                    .toList();
+            List<SaleEntity> purchases = sales.findUnbilledMonthEndByCustomerAndStore(
+                            customer.getCustomerId(), storeId, closedThroughDate).stream()
+                    .filter(sale -> key.cutoffDate().equals(sale.getBillingCutoffDate()))
+                    .toList();
+            if (rows.isEmpty() && purchases.isEmpty()) {
                 continue;
             }
 
-            List<AmortizationScheduleEntity> rows =
-                    schedules.findBillable(customer.getCustomerId(), from, to);
-            if (rows.isEmpty()) {
-                continue;
-            }
-
-            BigDecimal principal = sumRows(rows, AmortizationScheduleEntity::getPrincipalAmount);
+            BigDecimal installmentPrincipal = sumRows(rows, AmortizationScheduleEntity::getPrincipalAmount);
+            BigDecimal purchasePrincipal = purchases.stream().map(SaleEntity::getTotalAmount)
+                    .reduce(ZERO, BigDecimal::add).setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
             BigDecimal interest = sumRows(rows, AmortizationScheduleEntity::getCompensatoryInterest);
-            LocalDate dueDate = rows.stream()
-                    .map(AmortizationScheduleEntity::getDueDate)
-                    .min(LocalDate::compareTo)
-                    .orElse(to);
-
-            int overdueDays = today.isAfter(dueDate)
-                    ? (int) ChronoUnit.DAYS.between(dueDate, today)
-                    : 0;
-            BigDecimal penalty = engine.overduePenalty(principal, penaltyTea(customer), overdueDays);
-            BigDecimal total = principal.add(interest).add(penalty)
+            BigDecimal principal = purchasePrincipal.add(installmentPrincipal)
                     .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
-            boolean overdue = today.isAfter(dueDate);
+            LocalDate dueDate = BillingCalendar.paymentDueAfter(key.cutoffDate(), customer.getPaymentDueDay());
 
+            // Mora remains dynamic until payoff. This avoids storing an accrual
+            // date that could be mistaken for the contractual statement cutoff.
+            BigDecimal total = principal.add(interest).setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
+            boolean overdue = today.isAfter(dueDate);
             MonthlySettlementEntity settlement = new MonthlySettlementEntity();
             settlement.setCustomerId(customer.getCustomerId());
-            settlement.setPeriodMonth(cutoffPeriod.getMonthValue());
-            settlement.setPeriodYear(cutoffPeriod.getYear());
-            settlement.setCutoffDate(today);
+            settlement.setPeriodMonth(period.getMonthValue());
+            settlement.setPeriodYear(period.getYear());
+            settlement.setCutoffDate(key.cutoffDate());
             settlement.setPaymentDueDate(dueDate);
-            // Las compras a credito siempre se financian en cuotas: su importe
-            // ya esta representado por month_installments_amount. Esta columna
-            // queda en cero para no duplicar la deuda.
-            settlement.setMonthPurchasesAmount(ZERO);
-            settlement.setMonthInstallmentsAmount(principal);
+            settlement.setMonthPurchasesAmount(purchasePrincipal);
+            settlement.setMonthInstallmentsAmount(installmentPrincipal);
             settlement.setCompensatoryInterestAmount(interest);
-            settlement.setPenaltyInterestAmount(penalty);
+            settlement.setPenaltyInterestAmount(ZERO);
             settlement.setTotalAmountDue(total);
             settlement.setPaidAmount(ZERO);
             settlement.setPendingBalance(total);
             settlement.setSettlementStatus(overdue
-                    ? SettlementStatus.EN_MORA.name()
-                    : SettlementStatus.EMITIDA.name());
+                    ? SettlementStatus.OVERDUE.name() : SettlementStatus.PENDING.name());
             settlements.saveAndFlush(settlement);
 
             for (AmortizationScheduleEntity row : rows) {
                 row.setSettlementId(settlement.getSettlementId());
                 row.setInstallmentStatus(overdue
-                        ? InstallmentStatus.EN_MORA.name()
-                        : InstallmentStatus.FACTURADA.name());
+                        ? InstallmentStatus.OVERDUE.name() : InstallmentStatus.BILLED.name());
             }
             schedules.saveAll(rows);
+            for (SaleEntity purchase : purchases) {
+                purchase.setSettlementId(settlement.getSettlementId());
+                sales.save(purchase);
+            }
             generated++;
         }
-
-        String periodLabel = "%04d-%02d".formatted(cutoffPeriod.getYear(), cutoffPeriod.getMonthValue());
-        String message = generated == 0
-                ? "Corte del periodo " + periodLabel + " sin cuotas pendientes de facturar"
-                : "Corte ejecutado para el periodo " + periodLabel + ": "
-                        + generated + " liquidaciones generadas";
-        return new RunCutoffResponseDto(message, generated);
+        return new RunCutoffResponseDto(
+                "Billing cutoff completed for " + closedThroughDate + ": " + generated
+                        + " settlements generated",
+                generated);
     }
 
-    // ------------------------------------------------------------------
-    // Calculo del saldo exigible
-    // ------------------------------------------------------------------
+    private record CutoffKey(Integer customerId, LocalDate cutoffDate) { }
 
-    /**
-     * Saldo exigible a una fecha de calculo.
-     *
-     * @param daysOverdue dias totales desde el vencimiento
-     * @param principal   capital pendiente
-     * @param interest    interes compensatorio pendiente
-     * @param moratorium  penalidad pendiente + mora devengada desde el ultimo corte de calculo
-     */
     private record Quote(int daysOverdue,
                          BigDecimal principal,
                          BigDecimal interest,
@@ -434,106 +374,149 @@ public class SettlementService {
         BigDecimal paidPrincipal = sumPayments(history, PaymentEntity::getAllocatedToPrincipal);
         BigDecimal paidInterest = sumPayments(history, PaymentEntity::getAllocatedToInterest);
         BigDecimal paidPenalty = sumPayments(history, PaymentEntity::getAllocatedToPenalty);
+        BigDecimal principal = nonNegative(safe(settlement.getMonthPurchasesAmount())
+                .add(safe(settlement.getMonthInstallmentsAmount())).subtract(paidPrincipal));
+        BigDecimal interest = nonNegative(safe(settlement.getCompensatoryInterestAmount()).subtract(paidInterest));
+        BigDecimal storedPenalty = nonNegative(safe(settlement.getPenaltyInterestAmount()).subtract(paidPenalty));
 
-        BigDecimal principal = nonNegative(settlement.getMonthInstallmentsAmount().subtract(paidPrincipal));
-        BigDecimal interest = nonNegative(settlement.getCompensatoryInterestAmount().subtract(paidInterest));
-        BigDecimal storedPenalty = nonNegative(settlement.getPenaltyInterestAmount().subtract(paidPenalty));
-
-        int daysOverdue = 0;
-        if (principal.signum() > 0 && calculationDate.isAfter(settlement.getPaymentDueDate())) {
-            daysOverdue = (int) ChronoUnit.DAYS.between(settlement.getPaymentDueDate(), calculationDate);
-        }
-
-        // La penalidad se devenga sobre el capital pendiente desde el ultimo
-        // punto de calculo (ultimo pago o fecha de corte). El historial puede
-        // venir en orden ascendente o descendente segun el repositorio usado.
+        LocalDate dueDate = settlement.getPaymentDueDate();
+        int daysOverdue = calculationDate.isAfter(dueDate) ? Math.max(0, engine.days30E360(dueDate, calculationDate)) : 0;
         LocalDate lastAccrual = history.stream()
-                .map(PaymentEntity::getPaymentDatetime)
-                .filter(Objects::nonNull)
+                .map(PaymentEntity::getPaymentDatetime).filter(Objects::nonNull)
                 .max(Instant::compareTo)
-                .map(instant -> instant.atZone(ZoneOffset.UTC).toLocalDate())
+                .map(instant -> instant.atZone(ZoneId.of("America/Lima")).toLocalDate())
                 .orElse(settlement.getCutoffDate());
-        LocalDate accrualFrom = lastAccrual.isAfter(settlement.getPaymentDueDate())
-                ? lastAccrual
-                : settlement.getPaymentDueDate();
+        LocalDate accrualFrom = lastAccrual.isAfter(dueDate) ? lastAccrual : dueDate;
         int additionalDays = calculationDate.isAfter(accrualFrom)
-                ? (int) ChronoUnit.DAYS.between(accrualFrom, calculationDate)
-                : 0;
-
-        BigDecimal additionalPenalty = engine.overduePenalty(
-                principal, penaltyTea(customer), additionalDays);
+                ? Math.max(0, engine.days30E360(accrualFrom, calculationDate)) : 0;
+        BigDecimal additionalPenalty = additionalPenalty(
+                settlement, principal, paidPrincipal, customer, additionalDays);
         BigDecimal moratorium = storedPenalty.add(additionalPenalty)
                 .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
-
         return new Quote(daysOverdue, principal, interest, moratorium, calculationDate);
+    }
+
+    private BigDecimal additionalPenalty(MonthlySettlementEntity settlement,
+                                        BigDecimal principal,
+                                        BigDecimal paidPrincipal,
+                                        CustomerEntity customer,
+                                        int days) {
+        if (days <= 0 || principal.signum() <= 0) {
+            return ZERO;
+        }
+        List<AmortizationScheduleEntity> rows =
+                schedules.findBySettlementIdOrderByInstallmentNumberAsc(settlement.getSettlementId());
+        List<SaleEntity> monthEnd = sales.findBySettlementIdAndPaymentMode(
+                settlement.getSettlementId(), PaymentMode.MONTH_END.name());
+        Map<Integer, BigDecimal> principalBySale = new LinkedHashMap<>();
+        rows.stream().filter(row -> row.getInstallmentNumber() != null && row.getInstallmentNumber() > 0)
+                .forEach(row -> principalBySale.merge(row.getSaleId(), safe(row.getPrincipalAmount()), BigDecimal::add));
+        monthEnd.forEach(sale -> principalBySale.merge(
+                sale.getSaleId(), safe(sale.getTotalAmount()), BigDecimal::add));
+
+        if (principalBySale.isEmpty()) {
+            BigDecimal fallbackRate = normalizeCustomerPenaltyRate(customer);
+            return engine.overduePenalty(principal, fallbackRate, days);
+        }
+        BigDecimal paidRemaining = paidPrincipal;
+        BigDecimal totalPenalty = ZERO;
+        for (Map.Entry<Integer, BigDecimal> entry : principalBySale.entrySet()) {
+            BigDecimal salePrincipal = entry.getValue();
+            BigDecimal salePaid = salePrincipal.min(paidRemaining);
+            paidRemaining = paidRemaining.subtract(salePaid).max(ZERO);
+            BigDecimal remaining = salePrincipal.subtract(salePaid).max(ZERO);
+            SaleEntity sale = sales.findById(entry.getKey())
+                    .orElseThrow(() -> new ResourceNotFoundException("Sale not found: " + entry.getKey()));
+            BigDecimal rate = sale.getPenaltyTea();
+            if (rate == null) {
+                throw new BusinessException("MISSING_RATE_SNAPSHOT",
+                        "The sale has no contractual penalty rate snapshot", HttpStatus.CONFLICT);
+            }
+            totalPenalty = totalPenalty.add(engine.overduePenalty(remaining, rate, days));
+        }
+        return totalPenalty.setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal normalizeCustomerPenaltyRate(CustomerEntity customer) {
+        try {
+            return engine.normalize(customer.getPenaltyRateValue(),
+                    pe.upc.credito.domain.enums.RateType.valueOf(customer.getPenaltyRateType()),
+                    customer.getPenaltyRatePeriodDays(),
+                    "NOMINAL".equals(customer.getPenaltyRateType())
+                            ? customer.getPenaltyCapitalizationDays() : null).tea();
+        } catch (IllegalArgumentException | NullPointerException ex) {
+            throw new BusinessException("INVALID_CUSTOMER_RATE", "The customer's penalty terms are invalid",
+                    HttpStatus.UNPROCESSABLE_ENTITY);
+        }
     }
 
     private SettlementResponseDto toDto(MonthlySettlementEntity settlement,
                                         CustomerEntity customer,
                                         UserEntity user,
                                         List<PaymentEntity> history) {
-        LocalDate today = clock.today();
         boolean paid = isPaid(settlement);
-        Quote quote = paid ? null : quote(settlement, customer, today, history);
-        String status = paid
-                ? "PAID"
-                : (today.isAfter(settlement.getPaymentDueDate()) ? "OVERDUE" : "PENDING");
-
-        // total_due es el importe facturado (no el saldo pendiente): el
-        // frontend muestra la misma cifra antes y despues del pago. Para las
-        // liquidaciones abiertas se suman los pagos ya imputados para no
-        // perder el historico cuando hubo abonos parciales.
-        BigDecimal penaltyAmount;
-        BigDecimal totalDue;
-        if (paid) {
-            penaltyAmount = nonNegative(settlement.getPenaltyInterestAmount());
-            totalDue = nonNegative(settlement.getTotalAmountDue());
-        } else {
-            BigDecimal paidPenalty = sumPayments(history, PaymentEntity::getAllocatedToPenalty);
-            penaltyAmount = quote.moratorium().add(paidPenalty)
-                    .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
-            totalDue = nonNegative(settlement.getPaidAmount()).add(quote.total())
-                    .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
-        }
-
+        Quote quote = paid ? null : quote(settlement, customer, clock.today(), history);
+        String status = paid ? SettlementStatus.PAID.name()
+                : (clock.today().isAfter(settlement.getPaymentDueDate())
+                    ? SettlementStatus.OVERDUE.name() : SettlementStatus.PENDING.name());
+        BigDecimal penalty = paid ? safe(settlement.getPenaltyInterestAmount()) : quote.moratorium();
+        BigDecimal totalDue = paid ? safe(settlement.getTotalAmountDue())
+                : safe(settlement.getPaidAmount()).add(quote.total()).setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal principal = safe(settlement.getMonthPurchasesAmount())
+                .add(safe(settlement.getMonthInstallmentsAmount()));
         return new SettlementResponseDto(
-                settlement.getSettlementId(),
-                ApiCodes.settlement(settlement.getSettlementId()),
-                settlement.getCustomerId(),
-                Names.fullName(user, settlement.getCustomerId()),
-                settlement.getCutoffDate().toString(),
-                settlement.getPaymentDueDate().toString(),
-                Amounts.money(settlement.getMonthInstallmentsAmount()),
-                Amounts.money(settlement.getCompensatoryInterestAmount()),
-                Amounts.money(penaltyAmount),
-                Amounts.money(totalDue),
-                status,
+                settlement.getSettlementId(), ApiCodes.settlement(settlement.getSettlementId()),
+                settlement.getCustomerId(), Names.fullName(user, settlement.getCustomerId()),
+                settlement.getCutoffDate().toString(), settlement.getPaymentDueDate().toString(),
+                Amounts.money(principal), Amounts.money(settlement.getCompensatoryInterestAmount()),
+                Amounts.money(penalty), Amounts.money(totalDue), status,
                 paid ? lastPaymentDate(history) : null);
     }
 
-    // ------------------------------------------------------------------
-    // Apoyo
-    // ------------------------------------------------------------------
-
-    private MonthlySettlementEntity requireSettlement(Integer settlementId, Integer storeId) {
+    private MonthlySettlementEntity requireSettlement(Integer settlementId, boolean lock) {
+        Integer storeId = tenant.currentStoreId();
+        if (CUSTOMER.equals(tenant.currentRole())) {
+            Integer customerId = tenant.currentCustomerId();
+            return settlements.findByIdAndCustomerAndStore(settlementId, customerId, storeId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Settlement not found: " + settlementId));
+        }
         return settlements.findByIdAndStore(settlementId, storeId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Liquidacion no encontrada: " + settlementId));
+                .orElseThrow(() -> new ResourceNotFoundException("Settlement not found: " + settlementId));
     }
 
     private boolean isPaid(MonthlySettlementEntity settlement) {
-        return SettlementStatus.PAGADA_TOTAL.name().equals(settlement.getSettlementStatus())
+        return SettlementStatus.PAID.name().equals(settlement.getSettlementStatus())
                 || settlement.getPendingBalance() == null
                 || settlement.getPendingBalance().signum() == 0;
     }
 
-    private BigDecimal penaltyTea(CustomerEntity customer) {
-        if (customer == null) {
+    private void requireStoreAdmin() {
+        if (!STORE_ADMIN.equals(tenant.currentRole())) {
+            throw new BusinessException("FORBIDDEN", "Only store administrators can run this operation",
+                    HttpStatus.FORBIDDEN);
+        }
+    }
+
+    private BigDecimal sumRows(List<AmortizationScheduleEntity> rows,
+                               Function<AmortizationScheduleEntity, BigDecimal> getter) {
+        return rows.stream().map(getter).filter(Objects::nonNull)
+                .reduce(ZERO, BigDecimal::add).setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal sumPayments(List<PaymentEntity> history,
+                                  Function<PaymentEntity, BigDecimal> getter) {
+        return history.stream().map(getter).filter(Objects::nonNull).reduce(ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal nonNegative(BigDecimal value) {
+        if (value == null || value.signum() <= 0) {
             return ZERO;
         }
-        RateType type = RateType.valueOf(customer.getPenaltyRateType());
-        return engine.normalize(customer.getPenaltyRateValue(), type,
-                FinancialMathEngine.COMMERCIAL_YEAR_DAYS).tea();
+        return value.setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal safe(BigDecimal value) {
+        return value == null ? ZERO : value;
     }
 
     private LocalDate parseDate(String raw, LocalDate fallback) {
@@ -541,73 +524,82 @@ public class SettlementService {
             return fallback;
         }
         try {
-            return LocalDate.parse(raw.trim());
+            LocalDate parsed = LocalDate.parse(raw.trim());
+            if (parsed.isBefore(fallback)) {
+                throw new BusinessException("INVALID_DATE", "Calculation date cannot precede today",
+                        HttpStatus.BAD_REQUEST);
+            }
+            return parsed;
         } catch (DateTimeParseException ex) {
-            throw new BusinessException("INVALID_DATE",
-                    "La fecha de calculo no es valida: " + raw, HttpStatus.BAD_REQUEST);
+            throw new BusinessException("INVALID_DATE", "The calculation date must use yyyy-MM-dd",
+                    HttpStatus.BAD_REQUEST);
         }
     }
 
-    private String normalizeReference(String raw) {
-        if (raw == null) {
+    private String normalizeKey(String raw) {
+        if (raw == null || raw.isBlank()) {
             return null;
         }
         String value = raw.trim();
-        return value.isEmpty() ? null : value;
-    }
-
-    private BigDecimal sumRows(List<AmortizationScheduleEntity> rows,
-                               Function<AmortizationScheduleEntity, BigDecimal> getter) {
-        return rows.stream()
-                .map(getter)
-                .filter(Objects::nonNull)
-                .reduce(ZERO, BigDecimal::add)
-                .setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
-    }
-
-    private BigDecimal sumPayments(List<PaymentEntity> history,
-                                   Function<PaymentEntity, BigDecimal> getter) {
-        return history.stream()
-                .map(getter)
-                .filter(Objects::nonNull)
-                .reduce(ZERO, BigDecimal::add);
-    }
-
-    private BigDecimal nonNegative(BigDecimal value) {
-        if (value == null) {
-            return ZERO;
+        if (value.length() > 100) {
+            throw new BusinessException("INVALID_IDEMPOTENCY_KEY", "Idempotency-Key cannot exceed 100 characters",
+                    HttpStatus.BAD_REQUEST);
         }
-        return value.signum() < 0 ? ZERO : value.setScale(Amounts.MONEY_SCALE, RoundingMode.HALF_UP);
+        return value;
+    }
+
+    private String normalizeReference(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return raw.trim();
+    }
+
+    private PaymentResponseDto toPaymentDto(PaymentEntity payment) {
+        BigDecimal received = payment.getReceivedAmount() == null
+                ? payment.getAmountPaid() : payment.getReceivedAmount();
+        BigDecimal favourAfter = payment.getFavourBalanceAfter() == null ? ZERO : payment.getFavourBalanceAfter();
+        MonthlySettlementEntity settlement = settlements.findById(payment.getSettlementId()).orElse(null);
+        Integer customerId = settlement == null ? null : settlement.getCustomerId();
+        return new PaymentResponseDto(
+                payment.getPaymentId(), ApiCodes.payment(payment.getPaymentId()), payment.getSettlementId(),
+                customerId, Amounts.money(payment.getAmountPaid()), payment.getPaymentDatetime().toString(),
+                pe.upc.credito.domain.enums.PaymentMethod.valueOf(payment.getPaymentMethod()),
+                payment.getReferenceNumber(), ApiCodes.receipt(payment.getPaymentId()),
+                Amounts.money(received), Amounts.money(favourAfter),
+                Amounts.money(payment.getAllocatedToPenalty()),
+                Amounts.money(payment.getAllocatedToInterest()),
+                Amounts.money(payment.getAllocatedToPrincipal()));
+    }
+
+    private boolean isPaidStatus(String status) {
+        return InstallmentStatus.PAID.name().equals(status);
     }
 
     private String lastPaymentDate(List<PaymentEntity> history) {
-        return history.stream()
-                .map(PaymentEntity::getPaymentDatetime)
-                .filter(Objects::nonNull)
+        return history.stream().map(PaymentEntity::getPaymentDatetime).filter(Objects::nonNull)
                 .max(Instant::compareTo)
-                .map(instant -> instant.atZone(ZoneOffset.UTC).toLocalDate().toString())
-                .orElse(null);
+                .map(instant -> instant.atZone(ZoneId.of("America/Lima")).toLocalDate().toString()).orElse(null);
     }
 
-    /** Marca la venta como completada cuando todas sus cuotas fueron pagadas. */
-    private void completeSalesIfPaid(List<AmortizationScheduleEntity> paidRows) {
-        Set<Integer> saleIds = paidRows.stream()
-                .map(AmortizationScheduleEntity::getSaleId)
-                .collect(Collectors.toSet());
-
+    private void completeSalesIfPaid(List<AmortizationScheduleEntity> paidRows, Integer settlementId) {
+        Set<Integer> saleIds = paidRows.stream().map(AmortizationScheduleEntity::getSaleId).collect(Collectors.toSet());
         for (Integer saleId : saleIds) {
-            List<AmortizationScheduleEntity> saleRows =
-                    schedules.findBySaleIdOrderByInstallmentNumberAsc(saleId);
+            List<AmortizationScheduleEntity> saleRows = schedules.findBySaleIdOrderByInstallmentNumberAsc(saleId);
             boolean allPaid = saleRows.stream()
                     .filter(row -> row.getInstallmentNumber() != null && row.getInstallmentNumber() > 0)
-                    .allMatch(row -> InstallmentStatus.PAGADA.name().equals(row.getInstallmentStatus()));
+                    .allMatch(row -> isPaidStatus(row.getInstallmentStatus()));
             if (allPaid) {
-                SaleEntity sale = sales.findById(saleId).orElse(null);
-                if (sale != null) {
-                    sale.setSaleStatus(SaleStatus.REGISTRADA.name());
+                sales.findById(saleId).ifPresent(sale -> {
+                    sale.setSaleStatus(SaleStatus.PAID.name());
                     sales.save(sale);
-                }
+                });
             }
+        }
+        for (SaleEntity purchase : sales.findBySettlementIdAndPaymentMode(
+                settlementId, PaymentMode.MONTH_END.name())) {
+            purchase.setSaleStatus(SaleStatus.PAID.name());
+            sales.save(purchase);
         }
     }
 }

@@ -1,55 +1,54 @@
-# =====================================================================
-# docker-compose.yml - Backend + PostgreSQL
-#
-#   docker compose up --build
-#
-# Levanta la base de datos y el backend; al arrancar la aplicacion,
-# Flyway crea automaticamente las 9 tablas del capitulo 8.
-# =====================================================================
+name: proximity-credit
 services:
-
   postgres:
-    image: postgres:17.6
-    container_name: credito-pg
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: credito_proximidad
-      POSTGRES_USER: credito
-      POSTGRES_PASSWORD: credito
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: proximity_credit
+      POSTGRES_USER: proximity_credit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-proximity-credit-local}
     volumes:
-      - credito_pgdata:/var/lib/postgresql/data
+      - postgres18_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U credito -d credito_proximidad"]
+      test: ["CMD-SHELL", "pg_isready -U proximity_credit -d proximity_credit"]
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 10s
 
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: credito-proximidad-backend:latest
-    container_name: credito-backend
+    build: .
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       SERVER_PORT: "8081"
-      DB_URL: jdbc:postgresql://postgres:5432/credito_proximidad
-      DB_USER: credito
-      DB_PASSWORD: credito
-    ports:
-      - "8081:8081"
+      DB_URL: jdbc:postgresql://postgres:5432/proximity_credit
+      DB_USER: proximity_credit
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-proximity-credit-local}
+      JWT_SECRET: ${JWT_SECRET:-local-development-only-key-for-proximity-credit}
+      DEMO_DATA_ENABLED: ${DEMO_DATA_ENABLED:-true}
+      DEMO_SCENARIOS_ENABLED: ${DEMO_SCENARIOS_ENABLED:-true}
+      DEMO_CLOCK_ENABLED: ${DEMO_CLOCK_ENABLED:-false}
+      DEMO_CLOCK_DATE: ${DEMO_CLOCK_DATE:-2026-11-26}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/api/v1/actuator/health"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 45s
+      retries: 30
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ${FRONTEND_CONTEXT:-../credito-proximidad-frontend}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-4200}:80"
 
 volumes:
-  credito_pgdata:
+  postgres18_data:

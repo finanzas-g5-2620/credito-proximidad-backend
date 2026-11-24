@@ -13,7 +13,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/catalog")
-@Tag(name = "Catalogo", description = "Productos disponibles para la venta")
+@Tag(name = "Catalog", description = "Products available for sale")
 public class CatalogController {
 
     private final CatalogService catalogService;
@@ -25,8 +25,8 @@ public class CatalogController {
     }
 
     @GetMapping("/products")
-    @Operation(summary = "Listar productos vendibles",
-            description = "Devuelve el catalogo activo de la tienda con precio de lista a credito y stock.")
+    @Operation(summary = "List products for checkout",
+            description = "Returns the active catalog with cash and credit prices, installment eligibility and stock.")
     public List<CatalogProductResponseDto> listProducts() {
         return catalogService.list(tenant.currentStoreId());
     }
