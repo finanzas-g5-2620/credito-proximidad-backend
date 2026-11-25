@@ -39,6 +39,9 @@ public class SaleEntity {
     @Column(name = "total_amount", nullable = false, precision = 12, scale = 2)
     private BigDecimal totalAmount;
 
+    @Column(name = "month_end_interest", nullable = false, precision = 12, scale = 2)
+    private BigDecimal monthEndInterest = BigDecimal.ZERO;
+
     @Column(name = "payment_mode", nullable = false, length = 25)
     private String paymentMode;
 

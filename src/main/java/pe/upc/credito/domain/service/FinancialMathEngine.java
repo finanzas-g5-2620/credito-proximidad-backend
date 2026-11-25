@@ -243,22 +243,26 @@ public class FinancialMathEngine {
     // ------------------------------------------------------------------
 
     /**
-     * Late interest on overdue principal.
+     * Late interest on the overdue payment, including billed compensatory interest.
      *
-     * <pre>interest = overdue_principal * ((1 + annual_penalty_rate)^(d/360) - 1)</pre>
+     * <pre>interest = overdue_payment * ((1 + annual_penalty_rate)^(d/360) - 1)</pre>
      *
      *
      */
-    public BigDecimal overduePenalty(BigDecimal overduePrincipal, BigDecimal penaltyTea, int daysOverdue) {
-        if (daysOverdue <= 0 || overduePrincipal == null || overduePrincipal.signum() <= 0) {
+    public BigDecimal overduePenalty(BigDecimal overduePayment, BigDecimal penaltyTea, int daysOverdue) {
+        return accruedInterest(overduePayment, penaltyTea, daysOverdue);
+    }
+
+    public BigDecimal accruedInterest(BigDecimal amount, BigDecimal annualEffectiveRate, int days) {
+        if (days <= 0 || amount == null || amount.signum() <= 0) {
             return BigDecimal.ZERO.setScale(MONEY_SCALE);
         }
-        if (penaltyTea == null || penaltyTea.signum() < 0) {
-            throw new IllegalArgumentException("The penalty rate cannot be negative");
+        if (annualEffectiveRate == null || annualEffectiveRate.signum() < 0) {
+            throw new IllegalArgumentException("The annual effective rate cannot be negative");
         }
-        BigDecimal factor = powRational(ONE.add(penaltyTea, MC), daysOverdue,
+        BigDecimal factor = powRational(ONE.add(annualEffectiveRate, MC), days,
                 COMMERCIAL_YEAR_DAYS).subtract(ONE, MC);
-        return overduePrincipal.multiply(factor, MC).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
+        return amount.multiply(factor, MC).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
     /** European 30/360 day count. Dates on day 31 are treated as day 30. */

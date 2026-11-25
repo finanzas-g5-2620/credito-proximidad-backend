@@ -44,7 +44,7 @@ public class SettlementController {
 
     @GetMapping("/{id}")
     @Operation(summary = "Get a settlement",
-            description = "Returns one settlement within the authenticated customer's or store's scope.")
+            description = "Returns one settlement and its chronological month-end purchases within the authenticated scope.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Settlement found"),
             @ApiResponse(responseCode = "404", description = "Settlement not found in the authenticated scope")
@@ -55,7 +55,8 @@ public class SettlementController {
 
     @GetMapping("/{id}/payoff-quote")
     @Operation(summary = "Quote full settlement payoff",
-            description = "Calculates remaining principal, compensatory interest and principal-only late penalty. "
+            description = "Returns remaining principal and compensatory interest. Late interest is calculated "
+                    + "on the overdue payment, including compensatory interest. "
                     + "Customers may quote only their own settlement. If target_date is omitted, today's "
                     + "business date is used.")
     @ApiResponses({

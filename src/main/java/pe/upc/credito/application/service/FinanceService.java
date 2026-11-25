@@ -51,7 +51,7 @@ public class FinanceService {
 
         LocalDate firstDueDate;
         Integer paymentDay = null;
-        LocalDate contractualCutoff = null;
+        LocalDate contractualGraceEnd = null;
         int graceDays = request.grace_days() == null ? 0 : request.grace_days();
         if (request.customer_id() != null) {
             CustomerEntity customer = customers
@@ -74,10 +74,10 @@ public class FinanceService {
             }
             LocalDate purchaseDate = clock.today();
             LocalDate cutoff = BillingCalendar.cutoffForPurchase(purchaseDate, customer.getCutoffDay());
-            contractualCutoff = cutoff;
-            graceDays = engine.days30E360(purchaseDate, cutoff);
             paymentDay = customer.getPaymentDueDay();
-            firstDueDate = BillingCalendar.paymentDueAfter(cutoff, paymentDay);
+            contractualGraceEnd = BillingCalendar.paymentDueAfter(cutoff, customer.getCutoffDay(), paymentDay);
+            graceDays = engine.days30E360(purchaseDate, contractualGraceEnd);
+            firstDueDate = BillingCalendar.firstInstallmentDue(cutoff, customer.getCutoffDay(), paymentDay);
         } else if (request.first_due_date() == null || request.first_due_date().isBlank()) {
             firstDueDate = clock.today();
         } else {
@@ -112,7 +112,7 @@ public class FinanceService {
                     HttpStatus.UNPROCESSABLE_ENTITY);
         }
 
-        LocalDate graceEnd = contractualCutoff;
+        LocalDate graceEnd = contractualGraceEnd;
         return new SimulateScheduleResponseDto(
                 Amounts.money(schedule.initialCapital()),
                 Amounts.money(schedule.capitalizedCapital()),

@@ -1,5 +1,7 @@
 package pe.upc.credito.application.dto;
 
+import java.util.List;
+
 import io.swagger.v3.oas.annotations.media.Schema;
 
 @Schema(name = "Settlement", description = "Monthly customer statement")
@@ -17,6 +19,17 @@ public record SettlementResponseDto(
         @Schema(description = "Total amount due as of the consultation date", example = "530.60") String total_due,
         @Schema(description = "PENDING | OVERDUE | PAID", example = "PENDING") String status,
         @Schema(description = "Last payment date for a paid statement", example = "2026-12-04")
-        String paid_date
+        String paid_date,
+        @Schema(description = "Chronological month-end purchases, available on statement detail")
+        List<Purchase> purchases
 ) {
+    public record Purchase(
+            Integer sale_id,
+            @Schema(example = "V-000042") String sale_code,
+            @Schema(description = "Purchase date in America/Lima", example = "2026-11-25") String purchase_date,
+            @Schema(example = "175.00") String principal_amount,
+            @Schema(example = "0.81") String compensatory_interest,
+            @Schema(description = "Principal plus compensatory interest", example = "175.81") String total_due
+    ) {
+    }
 }

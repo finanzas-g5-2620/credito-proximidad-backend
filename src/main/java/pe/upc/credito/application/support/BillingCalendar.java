@@ -20,9 +20,16 @@ public final class BillingCalendar {
         return month.atDay(Math.min(day, month.lengthOfMonth()));
     }
 
-    public static LocalDate paymentDueAfter(LocalDate cutoff, int paymentDay) {
+    public static LocalDate paymentDueAfter(LocalDate cutoff, int cutoffDay, int paymentDay) {
         YearMonth month = YearMonth.from(cutoff);
-        LocalDate payment = dayOfMonth(month, paymentDay);
-        return payment.isAfter(cutoff) ? payment : dayOfMonth(month.plusMonths(1), paymentDay);
+        return dayOfMonth(paymentDay > cutoffDay ? month : month.plusMonths(1), paymentDay);
+    }
+
+    public static LocalDate installmentCutoff(LocalDate purchaseCutoff, int cutoffDay, int installmentNumber) {
+        return dayOfMonth(YearMonth.from(purchaseCutoff).plusMonths(installmentNumber), cutoffDay);
+    }
+
+    public static LocalDate firstInstallmentDue(LocalDate purchaseCutoff, int cutoffDay, int paymentDay) {
+        return paymentDueAfter(installmentCutoff(purchaseCutoff, cutoffDay, 1), cutoffDay, paymentDay);
     }
 }

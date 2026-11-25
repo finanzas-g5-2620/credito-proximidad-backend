@@ -15,6 +15,10 @@ public record SaleResponseDto(
         @Schema(example = "1") Integer store_id,
         @Schema(example = "INSTALLMENTS") PaymentMode payment_mode,
         @Schema(example = "350.00") String total_amount,
+        @Schema(description = "Compensatory interest for a month-end purchase", example = "0.81")
+        String month_end_interest,
+        @Schema(description = "First contractual payment date for credit sales", example = "2026-12-05")
+        String first_due_date,
         @Schema(description = "COMPLETED | PENDING | CANCELLED | VOIDED", example = "PENDING") String status,
         @Schema(example = "3") Integer installments_count,
         @Schema(example = "0") Integer grace_days,

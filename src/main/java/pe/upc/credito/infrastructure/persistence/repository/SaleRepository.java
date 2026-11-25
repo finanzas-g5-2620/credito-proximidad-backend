@@ -32,7 +32,7 @@ public interface SaleRepository extends JpaRepository<SaleEntity, Integer> {
             Integer customerId, LocalDate billingCutoffDate, String paymentMode);
 
     @Query("""
-            select coalesce(sum(s.totalAmount), 0) from SaleEntity s
+            select coalesce(sum(s.totalAmount + s.monthEndInterest), 0) from SaleEntity s
             where s.customerId = :customerId
               and s.paymentMode = 'MONTH_END'
               and s.settlementId is null

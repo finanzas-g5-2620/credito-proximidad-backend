@@ -190,6 +190,7 @@ public class SaleService {
         int installmentsCount = 1;
         int graceDays = 0;
         BigDecimal tea = null;
+        BigDecimal monthEndInterest = ZERO;
         BigDecimal penaltyTea = null;
         LocalDate billingCutoffDate = null;
         LocalDate firstDueDate = null;
@@ -199,9 +200,15 @@ public class SaleService {
             status = SaleStatus.REGISTERED;
         } else {
             ensureMonthlyPaymentAllowed(customer, saleDate, mode);
-            ensureCreditLimit(customer, total);
             billingCutoffDate = BillingCalendar.cutoffForPurchase(saleDate, customer.getCutoffDay());
-            firstDueDate = BillingCalendar.paymentDueAfter(billingCutoffDate, customer.getPaymentDueDay());
+            firstDueDate = BillingCalendar.paymentDueAfter(billingCutoffDate, customer.getCutoffDay(), customer.getPaymentDueDay());
+            if (mode == PaymentMode.MONTH_END) {
+                tea = normalizeCustomerRate(customer.getCompensatoryRateType(),
+                        customer.getCompensatoryRateValue(), customer.getCompensatoryRatePeriodDays(),
+                        customer.getCompensatoryCapitalizationDays());
+                monthEndInterest = engine.accruedInterest(total, tea, engine.days30E360(saleDate, firstDueDate));
+            }
+            ensureCreditLimit(customer, total.add(monthEndInterest));
             penaltyTea = normalizeCustomerRate(customer.getPenaltyRateType(),
                     customer.getPenaltyRateValue(), customer.getPenaltyRatePeriodDays(),
                     customer.getPenaltyCapitalizationDays());
@@ -209,6 +216,8 @@ public class SaleService {
         }
 
         if (mode == PaymentMode.INSTALLMENTS) {
+            firstDueDate = BillingCalendar.firstInstallmentDue(
+                    billingCutoffDate, customer.getCutoffDay(), customer.getPaymentDueDay());
             if (request.installments_count() == null) {
                 throw new BusinessException("INSTALLMENTS_REQUIRED",
                         "The installment count is required for INSTALLMENTS", HttpStatus.BAD_REQUEST);
@@ -228,7 +237,8 @@ public class SaleService {
                 throw new BusinessException("INSTALLMENTS_OUT_OF_RANGE",
                         "The installment count exceeds the customer's credit term", HttpStatus.UNPROCESSABLE_ENTITY);
             }
-            graceDays = engine.days30E360(saleDate, billingCutoffDate);
+            graceDays = engine.days30E360(saleDate,
+                    BillingCalendar.paymentDueAfter(billingCutoffDate, customer.getCutoffDay(), customer.getPaymentDueDay()));
             if (request.grace_days() != null && request.grace_days() != graceDays) {
                 throw new BusinessException("GRACE_PERIOD_CHANGED",
                         "The quoted grace period changed; refresh the quote before registering the sale",
@@ -260,6 +270,7 @@ public class SaleService {
         sale.setNumberOfMonths(installmentsCount);
         sale.setSaleStatus(status.name());
         sale.setTea(tea);
+        sale.setMonthEndInterest(monthEndInterest);
         sale.setPenaltyTea(penaltyTea);
         sale.setBillingCutoffDate(billingCutoffDate);
         sale.setFirstDueDate(firstDueDate);
@@ -292,14 +303,16 @@ public class SaleService {
             List<AmortizationScheduleEntity> rows = new ArrayList<>(schedule.installments().size());
             for (SimulatedInstallment installment : schedule.installments()) {
                 int number = installment.installmentNumber();
-                LocalDate rowCutoff = number == 0 ? null : BillingCalendar.dayOfMonth(
-                        java.time.YearMonth.from(billingCutoffDate).plusMonths(number - 1), customer.getCutoffDay());
+                LocalDate rowCutoff = number == 0 ? null : BillingCalendar.installmentCutoff(
+                        billingCutoffDate, customer.getCutoffDay(), number);
                 AmortizationScheduleEntity row = new AmortizationScheduleEntity();
                 row.setSaleId(sale.getSaleId());
                 row.setSettlementId(null);
                 row.setInstallmentNumber(number);
                 row.setBillingCutoffDate(number == 0 ? billingCutoffDate : rowCutoff);
-                row.setDueDate(number == 0 ? billingCutoffDate : installment.dueDate());
+                row.setDueDate(number == 0
+                        ? BillingCalendar.paymentDueAfter(billingCutoffDate, customer.getCutoffDay(), customer.getPaymentDueDay())
+                        : installment.dueDate());
                 BigDecimal initialBalance = number == 0
                         ? total
                         : installment.principalAmount().add(installment.balanceAmount());
@@ -416,6 +429,8 @@ public class SaleService {
                 sale.getStoreId(),
                 mode,
                 Amounts.money(sale.getTotalAmount()),
+                mode == PaymentMode.MONTH_END ? Amounts.money(safe(sale.getMonthEndInterest())) : null,
+                sale.getFirstDueDate() == null ? null : sale.getFirstDueDate().toString(),
                 sale.getSaleStatus(),
                 count,
                 graceDays,

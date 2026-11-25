@@ -106,7 +106,7 @@ class SettlementServiceTest {
     }
 
     @Test
-    void payoffPenaltyAccruesOnOutstandingPrincipalNotCompensatoryInterest() {
+    void payoffPenaltyAccruesOnPrincipalAndCompensatoryInterestDue() {
         MonthlySettlementEntity settlement = settlement();
         settlement.setCutoffDate(LocalDate.of(2026, 11, 1));
         settlement.setPaymentDueDate(LocalDate.of(2026, 11, 10));
@@ -131,15 +131,14 @@ class SettlementServiceTest {
 
         var quote = service().payoffQuote(1, null);
 
-        BigDecimal principalOnlyPenalty = new FinancialMathEngine().overduePenalty(
-                new BigDecimal("100.00"), new BigDecimal("0.3600000"), 30);
+        BigDecimal payoffPenalty = new FinancialMathEngine().overduePenalty(
+                new BigDecimal("150.00"), new BigDecimal("0.3600000"), 30);
         assertThat(quote.days_overdue()).isEqualTo(30);
         assertThat(quote.overdue_principal()).isEqualTo("100.00");
         assertThat(quote.compensatory_interest()).isEqualTo("50.00");
-        assertThat(quote.moratorium_interest()).isEqualTo(principalOnlyPenalty.setScale(2).toPlainString());
+        assertThat(quote.moratorium_interest()).isEqualTo(payoffPenalty.setScale(2).toPlainString());
         assertThat(quote.total_payoff_amount()).isEqualTo(
-                new BigDecimal("150.00").add(principalOnlyPenalty).setScale(2).toPlainString());
-        assertThat(principalOnlyPenalty).isLessThan(new BigDecimal("3.00"));
+                new BigDecimal("150.00").add(payoffPenalty).setScale(2).toPlainString());
     }
 
     private SettlementService service() {
